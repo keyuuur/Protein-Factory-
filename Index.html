@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.2, user-scalable=no" />
+    <meta charset="UTF-8" />
+    <title>Pirate Protein Factory</title>
+    <?!= include('Styles'); ?>
+  </head>
+  <body>
+    <main id="app" class="app-shell"></main>
+    <dialog id="codon-modal" class="codon-modal">
+      <div class="codon-modal-content">
+        <header>
+          <h2>Codon Wheel</h2>
+          <button type="button" onclick="closeCodonWheel()">Close</button>
+        </header>
+        <p>Use this as a quick check while translating mRNA. Ask your teacher for the classroom wheel if you need a physical reference.</p>
+        <div id="codon-wheel-cells"></div>
+      </div>
+    </dialog>
+    <?!= include('ClientScript'); ?>
+  </body>
+</html>

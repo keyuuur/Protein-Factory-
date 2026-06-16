@@ -1,0 +1,799 @@
+<script>
+  (function () {
+    'use strict';
+
+    const EXIT_WARNING = 'If you leave now, unfinished rounds will count as zero.';
+    const TOTAL_ROUNDS = 8;
+
+    const CODON_MAP = {
+      AUG: 'Met',
+      GUC: 'Val',
+      CCC: 'Pro',
+      UAC: 'Tyr',
+      AAG: 'Lys',
+      GAA: 'Glu'
+    };
+
+    const ROUND_DEFINITIONS = [
+      {
+        id: 'dna-1',
+        type: 'dna',
+        title: 'Round 1: DNA Replication',
+        prompt: 'Build the complementary DNA strand.',
+        template: 'ATCG',
+        answer: 'TAGC',
+        options: ['A', 'T', 'C', 'G'],
+        hint: 'DNA base pairing: A pairs with T. C pairs with G.'
+      },
+      {
+        id: 'dna-2',
+        type: 'dna',
+        title: 'Round 2: DNA Replication',
+        prompt: 'Build the complementary DNA strand.',
+        template: 'CGTA',
+        answer: 'GCAT',
+        options: ['A', 'T', 'C', 'G'],
+        hint: 'Every A needs T, and every T needs A, as a pair.'
+      },
+      {
+        id: 'tx-1',
+        type: 'transcription',
+        title: 'Round 3: Transcription',
+        prompt: 'Convert the DNA strand into mRNA.',
+        template: 'TAC',
+        answer: 'AUG',
+        options: ['A', 'U', 'C', 'G'],
+        hint: 'RNA uses U instead of T.'
+      },
+      {
+        id: 'tx-2',
+        type: 'transcription',
+        title: 'Round 4: Transcription',
+        prompt: 'Convert the DNA strand into mRNA.',
+        template: 'CGAT',
+        answer: 'GCUA',
+        options: ['A', 'U', 'C', 'G'],
+        hint: 'Use the same pairing ideas: A->U, T->A, C->G, G->C.'
+      },
+      {
+        id: 'tl-1',
+        type: 'translation',
+        title: 'Round 5: Translation',
+        prompt: 'Translate each mRNA codon to amino acids, one codon at a time.',
+        codons: ['AUG', 'GUC'],
+        answers: ['Met', 'Val'],
+        mode: 'perCodon',
+        codonChoices: [
+          ['Met', 'Val', 'Tyr', 'Asn'],
+          ['Val', 'Met', 'Pro', 'Gln']
+        ],
+        hint: 'Read mRNA three bases at a time, then translate one codon before moving on.'
+      },
+      {
+        id: 'tl-2',
+        type: 'translation',
+        title: 'Round 6: Translation',
+        prompt: 'Translate the full mRNA sequence.',
+        codons: ['CCC', 'UAC', 'AAG'],
+        answers: ['Pro', 'Tyr', 'Lys'],
+        mode: 'full',
+        codonChoices: [
+          ['Pro', 'Val', 'Asp', 'Glu'],
+          ['Tyr', 'Met', 'Asn', 'Ser'],
+          ['Lys', 'Arg', 'Asp', 'Glu']
+        ],
+        hint: 'For this one, check your whole amino-acid chain after selecting all options.'
+      },
+      {
+        id: 'match-1',
+        type: 'protein',
+        title: 'Round 7: Protein / Trait Matching',
+        prompt: 'Match the amino acid chain to the correct protein and trait.',
+        chain: 'Met-Val',
+        options: [
+          { protein: 'Lactase', trait: 'Can digest lactose' },
+          { protein: 'Altered Lactase', trait: 'Cannot digest lactose' },
+          { protein: 'Pigment Protein', trait: 'Produces melanin' }
+        ],
+        correctTrait: 'Can digest lactose',
+        hint: 'Match your amino acid chain to the trait it would produce.'
+      },
+      {
+        id: 'match-2',
+        type: 'protein',
+        title: 'Round 8: Protein / Trait Matching',
+        prompt: 'Match the amino acid chain to the correct protein and trait.',
+        chain: 'Pro-Tyr-Lys',
+        options: [
+          { protein: 'Pigment Protein', trait: 'Produces melanin' },
+          { protein: 'Lactase', trait: 'Can digest lactose' },
+          { protein: 'Transport Carrier', trait: 'Cannot digest lactose' }
+        ],
+        correctTrait: 'Produces melanin',
+        hint: 'Use the chain as the only key to your final trait.'
+      }
+    ];
+
+    const TUTORIAL_TEXT = [
+      'DNA stays in the nucleus.',
+      'mRNA carries DNA instructions out to ribosomes.',
+      'Ribosomes read mRNA codons three at a time.',
+      'Each codon maps to one amino acid.',
+      'Amino acids join into a protein.',
+      'Proteins affect visible traits and phenotypes.'
+    ];
+
+    let state = {
+      screen: 'start',
+      firstName: '',
+      period: '1',
+      attemptId: '',
+      startTime: 0,
+      score: 0,
+      roundsCompleted: 0,
+      currentRoundIndex: 0,
+      responses: [],
+      roundResults: [],
+      roundState: initRoundState(ROUND_DEFINITIONS[0]),
+      feedback: '',
+      feedbackKind: '',
+      showHint: false,
+      awaitNext: false,
+      isSaving: false,
+      saveStatus: '',
+      endReason: 'incomplete'
+    };
+
+    const app = document.getElementById('app');
+    const codonModal = document.getElementById('codon-modal');
+    const codonWheelCells = document.getElementById('codon-wheel-cells');
+
+    window.startGame = function () {
+      var firstNameInput = document.getElementById('first-name');
+      var firstName = firstNameInput ? firstNameInput.value.trim() : '';
+      var periodSelect = document.getElementById('period');
+      var period = periodSelect ? periodSelect.value : '';
+
+      if (!firstName) {
+        alert('Please enter a first name.');
+        return;
+      }
+      state.firstName = firstName;
+      state.period = period;
+      state.screen = 'tutorial';
+      state.attemptId = Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000);
+      state.startTime = Date.now();
+      state.score = 0;
+      state.roundsCompleted = 0;
+      state.currentRoundIndex = 0;
+      state.responses = [];
+      state.roundResults = [];
+      state.feedback = '';
+      state.feedbackKind = '';
+      state.showHint = false;
+      state.roundState = initRoundState(ROUND_DEFINITIONS[0]);
+      state.awaitNext = false;
+      render();
+    };
+
+    window.skipTutorial = function () {
+      state.screen = 'game';
+      render();
+    };
+
+    window.startRounds = function () {
+      state.screen = 'game';
+      render();
+    };
+
+    window.toggleHint = function () {
+      state.showHint = !state.showHint;
+      render();
+    };
+
+    window.showTutorialAgain = function () {
+      state.screen = 'tutorial';
+      render();
+    };
+
+    window.appendBase = function (value) {
+      if (state.screen !== 'game' || state.awaitNext) {
+        return;
+      }
+      var round = currentRound();
+      if (!round || !state.roundState) return;
+      if (state.roundState.input.length >= round.template.length) {
+        return;
+      }
+      state.roundState.input = state.roundState.input + value;
+      render();
+    };
+
+    window.clearInput = function () {
+      if (state.screen !== 'game' || state.awaitNext) return;
+      state.roundState.input = '';
+      render();
+    };
+
+    window.backspace = function () {
+      if (state.screen !== 'game' || state.awaitNext) return;
+      state.roundState.input = state.roundState.input.slice(0, -1);
+      render();
+    };
+
+    window.checkCurrentRound = function () {
+      if (state.screen !== 'game' || state.awaitNext) return;
+      var round = currentRound();
+      if (!round) return;
+      state.roundState.attempts = (state.roundState.attempts || 0) + 1;
+
+      if (state.roundState.input.length !== round.answer.length) {
+        setFeedback('Check the length and use only DNA or RNA bases.', 'bad');
+        return;
+      }
+      if (state.roundState.input === round.answer) {
+        onRoundComplete({
+          responseText: state.roundState.input,
+          chain: '',
+          protein: '',
+          trait: ''
+        });
+        return;
+      }
+      setFeedback('Try again. Review the pairing or RNA rule for this round.', 'bad');
+    };
+
+    window.selectTranslationAA = function (index, value) {
+      if (state.screen !== 'game' || state.awaitNext) return;
+      var round = currentRound();
+      if (!round || round.type !== 'translation') return;
+
+      state.roundState.answers[index] = value;
+      state.roundState.attempts = (state.roundState.attempts || 0) + 1;
+
+      if (round.mode === 'perCodon') {
+        var expected = round.answers[index];
+        if (value !== expected) {
+          setFeedback('No problem. Try again for this codon.', 'bad');
+          return;
+        }
+
+        if (index < round.answers.length - 1) {
+          state.roundState.currentCodonIndex = index + 1;
+          setFeedback('Nice. Continue with the next codon.', 'ok');
+          render();
+          return;
+        }
+
+        onRoundComplete({
+          responseText: state.roundState.answers.join('-'),
+          chain: state.roundState.answers.join('-'),
+          protein: '',
+          trait: ''
+        });
+        return;
+      }
+
+      if (round.mode === 'full') {
+        render();
+        setFeedback('Keep your full sequence in mind, then press Check sequence.', 'ok');
+      }
+    };
+
+    window.checkTranslationFull = function () {
+      if (state.screen !== 'game' || state.awaitNext) return;
+      var round = currentRound();
+      if (!round || round.type !== 'translation' || round.mode !== 'full') return;
+
+      var unanswered = false;
+      for (var i = 0; i < round.answers.length; i++) {
+        if (!state.roundState.answers[i]) {
+          unanswered = true;
+        }
+      }
+      if (unanswered) {
+        setFeedback('Choose an amino acid for every codon first.', 'bad');
+        return;
+      }
+
+      state.roundState.attempts = (state.roundState.attempts || 0) + 1;
+      for (var i = 0; i < round.answers.length; i++) {
+        if (state.roundState.answers[i] !== round.answers[i]) {
+          setFeedback('Try again. Check the full chain before moving on.', 'bad');
+          return;
+        }
+      }
+
+      onRoundComplete({
+        responseText: state.roundState.answers.join('-'),
+        chain: state.roundState.answers.join('-'),
+        protein: '',
+        trait: ''
+      });
+    };
+
+    window.selectProteinMatch = function (index) {
+      if (state.screen !== 'game' || state.awaitNext) return;
+      var round = currentRound();
+      if (!round) return;
+
+      state.roundState.selectedIndex = index;
+      state.roundState.attempts = (state.roundState.attempts || 0) + 1;
+      var selected = round.options[index];
+      if (!selected) return;
+
+      if (selected.trait === round.correctTrait) {
+        onRoundComplete({
+          responseText: round.chain,
+          chain: round.chain,
+          protein: selected.protein,
+          trait: selected.trait
+        });
+      } else {
+        setFeedback('No. That is not the correct trait for this chain.', 'bad');
+      }
+    };
+
+    window.proceedToNextRound = function () {
+      if (state.currentRoundIndex < TOTAL_ROUNDS - 1) {
+        state.currentRoundIndex++;
+        state.roundState = initRoundState(currentRound());
+        state.feedback = '';
+        state.feedbackKind = '';
+        state.awaitNext = false;
+        state.showHint = false;
+        render();
+      } else {
+        state.screen = 'end';
+        finishAttempt(true);
+        render();
+      }
+    };
+
+    window.quitEarly = function () {
+      if (!window.confirm(EXIT_WARNING)) return;
+      state.endReason = 'quit';
+      state.screen = 'end';
+      finishAttempt(false, true);
+      render();
+    };
+
+    window.replayGame = function () {
+      state = {
+        screen: 'start',
+        firstName: '',
+        period: '1',
+        attemptId: '',
+        startTime: 0,
+        score: 0,
+        roundsCompleted: 0,
+        currentRoundIndex: 0,
+        responses: [],
+        roundResults: [],
+        roundState: initRoundState(ROUND_DEFINITIONS[0]),
+        feedback: '',
+        feedbackKind: '',
+        showHint: false,
+        awaitNext: false,
+        isSaving: false,
+        saveStatus: '',
+        endReason: 'incomplete'
+      };
+      render();
+    };
+
+    window.openCodonWheel = function () {
+      renderCodonWheel();
+      if (codonModal && codonModal.showModal) {
+        codonModal.showModal();
+      }
+    };
+
+    window.closeCodonWheel = function () {
+      if (codonModal && codonModal.close) {
+        codonModal.close();
+      }
+    };
+
+    function currentRound() {
+      return ROUND_DEFINITIONS[state.currentRoundIndex];
+    }
+
+    function initRoundState(round) {
+      if (!round) {
+        return {};
+      }
+      if (round.type === 'translation') {
+        return {
+          input: '',
+          answers: new Array(round.codons.length).fill(''),
+          currentCodonIndex: 0,
+          attempts: 0
+        };
+      }
+      if (round.type === 'protein') {
+        return {
+          selectedIndex: null,
+          attempts: 0
+        };
+      }
+      return {
+        input: '',
+        attempts: 0
+      };
+    }
+
+    function render() {
+      if (!app) return;
+      if (state.screen === 'start') {
+        app.innerHTML = renderStartScreen();
+        return;
+      }
+      if (state.screen === 'tutorial') {
+        app.innerHTML = renderTutorialScreen();
+        return;
+      }
+      if (state.screen === 'game') {
+        app.innerHTML = renderGameScreen();
+        return;
+      }
+      if (state.screen === 'end') {
+        app.innerHTML = renderEndScreen();
+      }
+    }
+
+    function renderStartScreen() {
+      var periodOptions = '';
+      for (var i = 1; i <= 7; i++) {
+        periodOptions += '<option value="' + i + '">' + i + '</option>';
+      }
+
+      return (
+        '<section class="screen">' +
+          '<h1>Pirate Protein Factory</h1>' +
+          '<p class="muted">A short iPad-friendly review game for this pathway: DNA → mRNA → amino acid chain → protein → trait.</p>' +
+          '<div class="top-note"><strong>Required</strong>: First name and class period are needed for score saving.</div>' +
+          '<div class="field">' +
+            '<label for="first-name">First Name</label>' +
+            '<input id="first-name" type="text" maxlength="30" autocomplete="given-name" placeholder="Type your first name" />' +
+          '</div>' +
+          '<div class="field">' +
+            '<label for="period">Class Period / Hour</label>' +
+            '<select id="period">' + periodOptions + '</select>' +
+          '</div>' +
+          '<button type="button" onclick="startGame()">Start Game</button>' +
+        '</section>'
+      );
+    }
+
+    function renderTutorialScreen() {
+      var list = '';
+      for (var i = 0; i < TUTORIAL_TEXT.length; i++) {
+        list += '<li>' + TUTORIAL_TEXT[i] + '</li>';
+      }
+      return (
+        '<section class="screen">' +
+          '<h2>Mini Tutorial</h2>' +
+          '<p>Use these steps as you play:</p>' +
+          '<ul>' + list + '</ul>' +
+          '<button type="button" class="success" onclick="startRounds()">Start Round 1</button>' +
+          '<button type="button" class="ghost" onclick="startRounds()">Skip Tutorial</button>' +
+        '</section>'
+      );
+    }
+
+    function renderGameScreen() {
+      var round = currentRound();
+      if (!round) {
+        return '<section class="screen"><h2>Something is missing</h2><p>Restart to begin.</p><button type="button" onclick="replayGame()">Restart</button></section>';
+      }
+
+      if (state.awaitNext) {
+        var isLast = state.currentRoundIndex === TOTAL_ROUNDS - 1;
+        var nextBtn = '<button type="button" class="success" onclick="proceedToNextRound()">' + (isLast ? 'See Final Score' : 'Next Round') + '</button>';
+        return (
+          '<section class="screen">' +
+            '<h2>Great job on ' + escapeHtml(round.title) + '</h2>' +
+            '<div class="feedback ok">' + state.feedback + '</div>' +
+            nextBtn +
+          '</section>'
+        );
+      }
+
+      var html = '';
+      html += '<section class="screen">';
+      html += '<div class="status-bar"><span class="pill">Round ' + (state.currentRoundIndex + 1) + ' / ' + TOTAL_ROUNDS + '</span><span class="pill">Score ' + state.score + '</span></div>';
+      html += '<h2>' + escapeHtml(round.title) + '</h2>';
+      html += '<p>' + escapeHtml(round.prompt) + '</p>';
+      html += '<button type="button" class="codon-wheel-btn" onclick="openCodonWheel()">Open Codon Wheel</button>';
+      html += '<div class="sequence-display">';
+      if (round.type === 'dna' || round.type === 'transcription') {
+        html += '<strong>Template:</strong> ' + escapeHtml(round.template) + '<br />';
+        html += '<strong>Your build:</strong> ' + (state.roundState.input || '').split('').join(' ') + ' (tap to add below)';
+      } else if (round.type === 'translation') {
+        html += '<strong>mRNA:</strong> ' + escapeHtml(round.codons.join(' ')) + '<br />';
+        html += '<strong>Current chain:</strong> ' +
+          escapeHtml((state.roundState.answers || []).filter(function (value) { return value; }).join('-') || 'not started');
+      } else {
+        html += '<strong>Amino acid chain:</strong> ' + escapeHtml(round.chain);
+      }
+      html += '</div>';
+
+      if (round.type === 'dna' || round.type === 'transcription') {
+        html += renderBaseRound(round);
+      } else if (round.type === 'translation') {
+        html += renderTranslationRound(round);
+      } else {
+        html += renderProteinRound(round);
+      }
+
+      html += '<div><button type="button" class="warn" onclick="quitEarly()">Quit / Exit</button></div>';
+      if (state.feedback) {
+        html += '<div class="feedback ' + state.feedbackKind + '">' + escapeHtml(state.feedback) + '</div>';
+      }
+      html += '</section>';
+      return html;
+    }
+
+    function renderBaseRound(round) {
+      var rows = '';
+      for (var i = 0; i < round.options.length; i++) {
+        rows += '<button type="button" onclick="appendBase(\'' + round.options[i] + '\')">' + round.options[i] + '</button>';
+      }
+      var hintButtonLabel = state.showHint ? 'Hide hint' : 'Show hint';
+      var hintBlock = state.showHint
+        ? '<div class="hint">Hint: ' + escapeHtml(round.hint) + '</div>'
+        : '';
+
+      return (
+        '<div>' +
+          '<div class="base-row">' + rows + '</div>' +
+          '<div class="pill-row">' +
+            '<button type="button" class="ghost" onclick="backspace()">Backspace</button>' +
+            '<button type="button" class="ghost" onclick="clearInput()">Clear</button>' +
+          '</div>' +
+          '<button type="button" class="success" onclick="checkCurrentRound()">Check Answer</button>' +
+          '<div class="pill-row">' +
+            '<button type="button" class="ghost" onclick="toggleHint()">' + hintButtonLabel + '</button>' +
+            '<div class="muted" style="padding: 10px 8px;">You can tap any base in any order.</div>' +
+          '</div>' +
+          hintBlock +
+        '</div>'
+      );
+    }
+
+    function renderTranslationRound(round) {
+      var codonHtml = '';
+      if (round.mode === 'perCodon') {
+        var activeCodonIndex = state.roundState.currentCodonIndex || 0;
+        var activeCodon = round.codons[activeCodonIndex];
+        var choices = round.codonChoices[activeCodonIndex] || [];
+        codonHtml += '<div class="codon-block">';
+        codonHtml += '<div class="codon-title">Codon ' + (activeCodonIndex + 1) + ' of ' + round.codons.length + ': ' + escapeHtml(activeCodon) + '</div>';
+        codonHtml += '<div class="base-row">';
+        for (var c = 0; c < choices.length; c++) {
+          codonHtml += '<button type="button" onclick="selectTranslationAA(' + activeCodonIndex + ', \'' + choices[c] + '\')">' + escapeHtml(choices[c]) + '</button>';
+        }
+        codonHtml += '</div>';
+        codonHtml += '</div>';
+      } else {
+        codonHtml += '<p class="hint">Select one amino acid for each codon, then press Check sequence.</p>';
+        for (var c2 = 0; c2 < round.codons.length; c2++) {
+          codonHtml += '<div class="codon-block">';
+          codonHtml += '<div class="codon-title">Codon ' + (c2 + 1) + ': ' + escapeHtml(round.codons[c2]) + '</div>';
+          codonHtml += '<div class="base-row">';
+          var choices2 = round.codonChoices[c2] || [];
+          for (var j = 0; j < choices2.length; j++) {
+            var aa = choices2[j];
+            var activeClass = state.roundState.answers[c2] === aa ? ' success' : '';
+            codonHtml += '<button type="button" class="' + activeClass + '" onclick="selectTranslationAA(' + c2 + ', \'' + aa + '\')">' + escapeHtml(aa) + '</button>';
+          }
+          codonHtml += '</div>';
+          codonHtml += '</div>';
+        }
+        codonHtml += '<button type="button" class="success" onclick="checkTranslationFull()">Check sequence</button>';
+      }
+
+      var hintButtonLabel = state.showHint ? 'Hide hint' : 'Show hint';
+      var hintBlock = state.showHint
+        ? '<div class="hint">Hint: ' + escapeHtml(round.hint) + '</div>'
+        : '';
+
+      return (
+        '<div>' +
+          '<div class="pill-row">' +
+            '<button type="button" class="ghost" onclick="toggleHint()">' + hintButtonLabel + '</button>' +
+            '<span class="muted">Tips and hints do not reduce score.</span>' +
+          '</div>' +
+          hintBlock +
+          codonHtml +
+        '</div>'
+      );
+    }
+
+    function renderProteinRound(round) {
+      var optionsHtml = '';
+      for (var i = 0; i < round.options.length; i++) {
+        optionsHtml +=
+          '<button type="button" class="trait-option" onclick="selectProteinMatch(' + i + ')">' +
+            '<div><strong>' + escapeHtml(round.options[i].protein) + '</strong></div>' +
+            '<div>' + escapeHtml(round.options[i].trait) + '</div>' +
+          '</button>';
+      }
+      var hintButtonLabel = state.showHint ? 'Hide hint' : 'Show hint';
+      var hintBlock = state.showHint
+        ? '<div class="hint">Hint: ' + escapeHtml(round.hint) + '</div>'
+        : '';
+
+      return (
+        '<div>' +
+          '<p><strong>Select the correct trait.</strong></p>' +
+          '<div class="pill-row">' +
+            '<button type="button" class="ghost" onclick="toggleHint()">' + hintButtonLabel + '</button>' +
+            '<span class="muted">Wrong guesses are allowed and do not reduce points.</span>' +
+          '</div>' +
+          hintBlock +
+          optionsHtml +
+        '</div>'
+      );
+    }
+
+    function renderEndScreen() {
+      var completed = state.endReason !== 'quit' && state.roundsCompleted >= TOTAL_ROUNDS;
+      var status = completed ? 'Completed' : 'Incomplete';
+      var percent = state.score > 0 ? Math.round((state.score / TOTAL_ROUNDS) * 1000) / 10 : 0;
+      var timeSpent = Math.max(0, Math.floor((Date.now() - state.startTime) / 1000));
+
+      var review = '';
+      var missed = [];
+      for (var i = 0; i < state.roundResults.length; i++) {
+        if (!state.roundResults[i].correct) {
+          missed.push(state.roundResults[i].type);
+        }
+      }
+      if (missed.length > 0) {
+        review = '<h3>Missed-skills review</h3><ul>';
+        for (var m = 0; m < missed.length; m++) {
+          review += '<li>' + escapeHtml(missed[m]) + '</li>';
+        }
+        review += '</ul>';
+      }
+
+      return (
+        '<section class="screen">' +
+          '<h2>Game Complete</h2>' +
+          '<div class="top-note">' +
+            '<div><strong>Student:</strong> ' + escapeHtml(state.firstName) + '</div>' +
+            '<div><strong>Period:</strong> ' + escapeHtml(state.period) + '</div>' +
+          '</div>' +
+          '<p><strong>Status:</strong> ' + status + '</p>' +
+          '<p><strong>Final score:</strong> ' + state.score + ' / ' + TOTAL_ROUNDS + ' (' + percent + '%)</p>' +
+          '<p><strong>Rounds completed:</strong> ' + state.roundsCompleted + '</p>' +
+          '<p><strong>Time:</strong> ' + timeSpent + ' seconds</p>' +
+          (state.saveStatus ? '<p class="muted">' + escapeHtml(state.saveStatus) + '</p>' : '') +
+          review +
+          '<button type="button" class="success" onclick="replayGame()">Replay</button>' +
+        '</section>'
+      );
+    }
+
+    function renderCodonWheel() {
+      var list = '';
+      Object.keys(CODON_MAP).forEach(function (codon) {
+        list += '<div class="codon-cell"><span class="codon">' + codon + '</span> → <strong>' + CODON_MAP[codon] + '</strong></div>';
+      });
+      codonWheelCells.innerHTML = '<div class="codon-list">' + list + '</div>';
+    }
+
+    function onRoundComplete(result) {
+      var round = currentRound();
+      state.score += 1;
+      state.roundsCompleted += 1;
+
+      state.roundResults.push({
+        round: state.currentRoundIndex + 1,
+        type: round.type,
+        prompt: round.prompt,
+        chain: result.chain || '',
+        selectedProtein: result.protein || '',
+        selectedTrait: result.trait || '',
+        response: result.responseText || '',
+        attempts: state.roundState.attempts || 0,
+        correct: true
+      });
+
+      state.responses.push({
+        round: state.currentRoundIndex + 1,
+        type: round.type,
+        response: result.responseText || ''
+      });
+
+      setFeedback('Correct. Great progress.', 'ok');
+      state.awaitNext = true;
+      state.saveStatus = 'Saving progress...';
+      finishAttempt(false, false);
+      render();
+    }
+
+    function setFeedback(message, kind) {
+      state.feedback = message;
+      state.feedbackKind = kind || 'bad';
+      render();
+    }
+
+    function finishAttempt(isFinalSubmit, isQuitEarly) {
+      if (state.isSaving && !isFinalSubmit) {
+        return;
+      }
+      state.isSaving = true;
+      state.saveStatus = isQuitEarly ? 'Saving incomplete attempt...' : 'Saving attempt...';
+
+      var completed = isFinalSubmit && state.roundsCompleted >= TOTAL_ROUNDS && !isQuitEarly;
+      var payload = {
+        attemptId: state.attemptId,
+        firstName: state.firstName,
+        period: state.period,
+        score: state.score,
+        percent: state.score > 0 ? Math.round((state.score / TOTAL_ROUNDS) * 1000) / 10 : 0,
+        completedStatus: completed ? 'Completed' : 'Incomplete',
+        roundsCompleted: state.roundsCompleted,
+        totalRounds: TOTAL_ROUNDS,
+        timeSpentSeconds: Math.max(0, Math.floor((Date.now() - state.startTime) / 1000)),
+        currentRound: state.currentRoundIndex + 1,
+        isAutosave: !isFinalSubmit,
+        isFinalSubmit: Boolean(isFinalSubmit),
+        responses: state.responses,
+        roundResults: state.roundResults,
+        userAgent: navigator.userAgent || ''
+      };
+
+      if (isQuitEarly) {
+        payload.completedStatus = 'Incomplete';
+        payload.isAutosave = true;
+        payload.isFinalSubmit = false;
+      }
+
+      google.script.run
+        .withFailureHandler(function (error) {
+          state.isSaving = false;
+          state.saveStatus = 'Save failed: ' + (error && error.message ? error.message : 'Unknown error');
+          render();
+        })
+        .withSuccessHandler(function (result) {
+          state.isSaving = false;
+          state.saveStatus = 'Saved. Best Score: ' + result.bestScore + ' (' + result.bestPercent + '%)';
+          if (isQuitEarly) {
+            state.endReason = 'quit';
+          }
+          if (isFinalSubmit) {
+            state.endReason = completed ? 'completed' : 'incomplete';
+          }
+          render();
+        })
+        .saveAttempt(payload);
+    }
+
+    function setExitGuard() {
+      window.addEventListener('beforeunload', function (event) {
+        if (state.screen === 'game' && state.roundsCompleted < TOTAL_ROUNDS && state.currentRoundIndex >= 0) {
+          event.preventDefault();
+          event.returnValue = EXIT_WARNING;
+          return EXIT_WARNING;
+        }
+      });
+    }
+
+    function escapeHtml(value) {
+      var text = String(value || '');
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    setExitGuard();
+    render();
+  })();
+</script>
