@@ -4,6 +4,8 @@
 
     const EXIT_WARNING = 'If you leave now, unfinished rounds will count as zero.';
     const TOTAL_ROUNDS = 8;
+    const AUTO_SAVE_DEBOUNCE_MS = 1250;
+    const INPUT_COOLDOWN_MS = 350;
 
     const CODON_MAP = {
       AUG: 'Met',
@@ -123,26 +125,14 @@
       'Proteins affect visible traits and phenotypes.'
     ];
 
-    let state = {
-      screen: 'start',
-      firstName: '',
-      period: '1',
-      attemptId: '',
-      startTime: 0,
-      score: 0,
-      roundsCompleted: 0,
-      currentRoundIndex: 0,
-      responses: [],
-      roundResults: [],
-      roundState: initRoundState(ROUND_DEFINITIONS[0]),
-      feedback: '',
-      feedbackKind: '',
-      showHint: false,
-      awaitNext: false,
-      isSaving: false,
-      saveStatus: '',
-      endReason: 'incomplete'
-    };
+    let saveDebounceTimer = null;
+    let pendingSaveType = '';
+    let saveRequestCounter = 0;
+    let latestSaveRequest = 0;
+    let isTransitionInProgress = false;
+    let inputCooldownUntil = 0;
+
+    let state = createGameState();
 
     const app = document.getElementById('app');
     const codonModal = document.getElementById('codon-modal');
@@ -158,21 +148,13 @@
         alert('Please enter a first name.');
         return;
       }
+      state = createGameState();
       state.firstName = firstName;
       state.period = period;
       state.screen = 'tutorial';
-      state.attemptId = Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000);
+      state.attemptId = makeAttemptId();
       state.startTime = Date.now();
-      state.score = 0;
-      state.roundsCompleted = 0;
-      state.currentRoundIndex = 0;
-      state.responses = [];
-      state.roundResults = [];
-      state.feedback = '';
-      state.feedbackKind = '';
-      state.showHint = false;
-      state.roundState = initRoundState(ROUND_DEFINITIONS[0]);
-      state.awaitNext = false;
+      clearPendingSave();
       render();
     };
 
@@ -197,7 +179,7 @@
     };
 
     window.appendBase = function (value) {
-      if (state.screen !== 'game' || state.awaitNext) {
+      if (isInputBlocked()) {
         return;
       }
       var round = currentRound();
@@ -210,19 +192,19 @@
     };
 
     window.clearInput = function () {
-      if (state.screen !== 'game' || state.awaitNext) return;
+      if (isInputBlocked()) return;
       state.roundState.input = '';
       render();
     };
 
     window.backspace = function () {
-      if (state.screen !== 'game' || state.awaitNext) return;
+      if (isInputBlocked()) return;
       state.roundState.input = state.roundState.input.slice(0, -1);
       render();
     };
 
     window.checkCurrentRound = function () {
-      if (state.screen !== 'game' || state.awaitNext) return;
+      if (isInputBlocked()) return;
       var round = currentRound();
       if (!round) return;
       state.roundState.attempts = (state.roundState.attempts || 0) + 1;
@@ -236,7 +218,10 @@
           responseText: state.roundState.input,
           chain: '',
           protein: '',
-          trait: ''
+          trait: '',
+          correct: true,
+          expected: round.answer,
+          submitted: state.roundState.input
         });
         return;
       }
@@ -244,7 +229,7 @@
     };
 
     window.selectTranslationAA = function (index, value) {
-      if (state.screen !== 'game' || state.awaitNext) return;
+      if (isInputBlocked()) return;
       var round = currentRound();
       if (!round || round.type !== 'translation') return;
 
@@ -269,7 +254,10 @@
           responseText: state.roundState.answers.join('-'),
           chain: state.roundState.answers.join('-'),
           protein: '',
-          trait: ''
+          trait: '',
+          correct: true,
+          expected: round.answers.join('-'),
+          submitted: state.roundState.answers.join('-')
         });
         return;
       }
@@ -281,7 +269,7 @@
     };
 
     window.checkTranslationFull = function () {
-      if (state.screen !== 'game' || state.awaitNext) return;
+      if (isInputBlocked()) return;
       var round = currentRound();
       if (!round || round.type !== 'translation' || round.mode !== 'full') return;
 
@@ -308,12 +296,15 @@
         responseText: state.roundState.answers.join('-'),
         chain: state.roundState.answers.join('-'),
         protein: '',
-        trait: ''
+        trait: '',
+        correct: true,
+        expected: round.answers.join('-'),
+        submitted: state.roundState.answers.join('-')
       });
     };
 
     window.selectProteinMatch = function (index) {
-      if (state.screen !== 'game' || state.awaitNext) return;
+      if (isInputBlocked()) return;
       var round = currentRound();
       if (!round) return;
 
@@ -327,7 +318,14 @@
           responseText: round.chain,
           chain: round.chain,
           protein: selected.protein,
-          trait: selected.trait
+          trait: selected.trait,
+          correct: true,
+          expected: round.correctTrait,
+          submitted: selected.trait,
+          expectedProtein: getCorrectProteinForRound(round),
+          expectedTrait: round.correctTrait,
+          submittedProtein: selected.protein,
+          submittedTrait: selected.trait
         });
       } else {
         setFeedback('No. That is not the correct trait for this chain.', 'bad');
@@ -335,18 +333,26 @@
     };
 
     window.proceedToNextRound = function () {
-      if (state.currentRoundIndex < TOTAL_ROUNDS - 1) {
-        state.currentRoundIndex++;
-        state.roundState = initRoundState(currentRound());
-        state.feedback = '';
-        state.feedbackKind = '';
-        state.awaitNext = false;
-        state.showHint = false;
-        render();
-      } else {
-        state.screen = 'end';
-        finishAttempt(true);
-        render();
+      if (state.isSaving || isTransitionInProgress || Date.now() < inputCooldownUntil) return;
+      isTransitionInProgress = true;
+      try {
+        if (state.currentRoundIndex < TOTAL_ROUNDS - 1) {
+          state.currentRoundIndex++;
+          state.roundState = initRoundState(currentRound());
+          state.feedback = '';
+          state.feedbackKind = '';
+          state.awaitNext = false;
+          state.showHint = false;
+          setInputCooldown();
+          render();
+        } else {
+          state.screen = 'end';
+          queueSave(true, false);
+          setInputCooldown();
+          render();
+        }
+      } finally {
+        isTransitionInProgress = false;
       }
     };
 
@@ -354,12 +360,58 @@
       if (!window.confirm(EXIT_WARNING)) return;
       state.endReason = 'quit';
       state.screen = 'end';
-      finishAttempt(false, true);
+      queueSave(true, true);
       render();
     };
 
     window.replayGame = function () {
-      state = {
+      state = createGameState();
+      if (window.closeCodonWheel) {
+        window.closeCodonWheel();
+      }
+      clearPendingSave();
+
+      var firstNameInput = document.getElementById('first-name');
+      var periodSelect = document.getElementById('period');
+      if (firstNameInput) {
+        firstNameInput.value = '';
+      }
+      if (periodSelect) {
+        periodSelect.value = '1';
+      }
+
+      render();
+    };
+
+    window.openCodonWheel = function () {
+      if (state.isSaving) return;
+      var round = currentRound();
+      if (!round || round.type !== 'translation') {
+        setFeedback('Codon wheel is only available during translation rounds.', 'bad');
+        return;
+      }
+      renderCodonWheel(round);
+      if (codonModal && codonModal.showModal) {
+        codonModal.showModal();
+      }
+    };
+
+    window.closeCodonWheel = function () {
+      if (codonModal && codonModal.close) {
+        codonModal.close();
+      }
+    };
+
+    function currentRound() {
+      return ROUND_DEFINITIONS[state.currentRoundIndex];
+    }
+
+    function makeAttemptId() {
+      return Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000);
+    }
+
+    function createGameState() {
+      return {
         screen: 'start',
         firstName: '',
         period: '1',
@@ -379,24 +431,35 @@
         saveStatus: '',
         endReason: 'incomplete'
       };
-      render();
-    };
+    }
 
-    window.openCodonWheel = function () {
-      renderCodonWheel();
-      if (codonModal && codonModal.showModal) {
-        codonModal.showModal();
+    function isInputBlocked() {
+      return state.screen !== 'game' || state.awaitNext || state.isSaving || isTransitionInProgress || Date.now() < inputCooldownUntil;
+    }
+
+    function setInputCooldown() {
+      inputCooldownUntil = Date.now() + INPUT_COOLDOWN_MS;
+    }
+
+    function clearPendingSave() {
+      if (saveDebounceTimer) {
+        clearTimeout(saveDebounceTimer);
       }
-    };
+      saveDebounceTimer = null;
+      pendingSaveType = '';
+      inputCooldownUntil = 0;
+    }
 
-    window.closeCodonWheel = function () {
-      if (codonModal && codonModal.close) {
-        codonModal.close();
+    function getCorrectProteinForRound(round) {
+      if (!round || round.type !== 'protein' || !Array.isArray(round.options)) {
+        return '';
       }
-    };
-
-    function currentRound() {
-      return ROUND_DEFINITIONS[state.currentRoundIndex];
+      for (var i = 0; i < round.options.length; i++) {
+        if (round.options[i] && round.options[i].trait === round.correctTrait) {
+          return round.options[i].protein || '';
+        }
+      }
+      return '';
     }
 
     function initRoundState(round) {
@@ -490,7 +553,7 @@
 
       if (state.awaitNext) {
         var isLast = state.currentRoundIndex === TOTAL_ROUNDS - 1;
-        var nextBtn = '<button type="button" class="success" onclick="proceedToNextRound()">' + (isLast ? 'See Final Score' : 'Next Round') + '</button>';
+        var nextBtn = '<button type="button" class="success" ' + (state.isSaving ? 'disabled' : '') + ' onclick="proceedToNextRound()">' + (isLast ? 'See Final Score' : 'Next Round') + '</button>';
         return (
           '<section class="screen">' +
             '<h2>Great job on ' + escapeHtml(round.title) + '</h2>' +
@@ -505,7 +568,11 @@
       html += '<div class="status-bar"><span class="pill">Round ' + (state.currentRoundIndex + 1) + ' / ' + TOTAL_ROUNDS + '</span><span class="pill">Score ' + state.score + '</span></div>';
       html += '<h2>' + escapeHtml(round.title) + '</h2>';
       html += '<p>' + escapeHtml(round.prompt) + '</p>';
-      html += '<button type="button" class="codon-wheel-btn" onclick="openCodonWheel()">Open Codon Wheel</button>';
+      if (round.type === 'translation') {
+        html += '<button type="button" class="codon-wheel-btn" ' + (state.isSaving ? 'disabled' : '') + ' onclick="openCodonWheel()">Open Codon Wheel</button>';
+      } else {
+        html += '<div class="muted">The Codon Wheel is available during translation rounds.</div>';
+      }
       html += '<div class="sequence-display">';
       if (round.type === 'dna' || round.type === 'transcription') {
         html += '<strong>Template:</strong> ' + escapeHtml(round.template) + '<br />';
@@ -527,7 +594,7 @@
         html += renderProteinRound(round);
       }
 
-      html += '<div><button type="button" class="warn" onclick="quitEarly()">Quit / Exit</button></div>';
+      html += '<div><button type="button" class="warn" ' + (state.isSaving ? 'disabled' : '') + ' onclick="quitEarly()">Quit / Exit</button></div>';
       if (state.feedback) {
         html += '<div class="feedback ' + state.feedbackKind + '">' + escapeHtml(state.feedback) + '</div>';
       }
@@ -538,7 +605,7 @@
     function renderBaseRound(round) {
       var rows = '';
       for (var i = 0; i < round.options.length; i++) {
-        rows += '<button type="button" onclick="appendBase(\'' + round.options[i] + '\')">' + round.options[i] + '</button>';
+        rows += '<button type="button" ' + (state.isSaving ? 'disabled' : '') + ' onclick="appendBase(\'' + round.options[i] + '\')">' + round.options[i] + '</button>';
       }
       var hintButtonLabel = state.showHint ? 'Hide hint' : 'Show hint';
       var hintBlock = state.showHint
@@ -547,14 +614,14 @@
 
       return (
         '<div>' +
-          '<div class="base-row">' + rows + '</div>' +
-          '<div class="pill-row">' +
-            '<button type="button" class="ghost" onclick="backspace()">Backspace</button>' +
-            '<button type="button" class="ghost" onclick="clearInput()">Clear</button>' +
+        '<div class="base-row">' + rows + '</div>' +
+        '<div class="pill-row">' +
+            '<button type="button" class="ghost" ' + (state.isSaving ? 'disabled' : '') + ' onclick="backspace()">Backspace</button>' +
+            '<button type="button" class="ghost" ' + (state.isSaving ? 'disabled' : '') + ' onclick="clearInput()">Clear</button>' +
           '</div>' +
-          '<button type="button" class="success" onclick="checkCurrentRound()">Check Answer</button>' +
+          '<button type="button" class="success" ' + (state.isSaving ? 'disabled' : '') + ' onclick="checkCurrentRound()">Check Answer</button>' +
           '<div class="pill-row">' +
-            '<button type="button" class="ghost" onclick="toggleHint()">' + hintButtonLabel + '</button>' +
+            '<button type="button" class="ghost" ' + (state.isSaving ? 'disabled' : '') + ' onclick="toggleHint()">' + hintButtonLabel + '</button>' +
             '<div class="muted" style="padding: 10px 8px;">You can tap any base in any order.</div>' +
           '</div>' +
           hintBlock +
@@ -572,7 +639,7 @@
         codonHtml += '<div class="codon-title">Codon ' + (activeCodonIndex + 1) + ' of ' + round.codons.length + ': ' + escapeHtml(activeCodon) + '</div>';
         codonHtml += '<div class="base-row">';
         for (var c = 0; c < choices.length; c++) {
-          codonHtml += '<button type="button" onclick="selectTranslationAA(' + activeCodonIndex + ', \'' + choices[c] + '\')">' + escapeHtml(choices[c]) + '</button>';
+          codonHtml += '<button type="button" ' + (state.isSaving ? 'disabled' : '') + ' onclick="selectTranslationAA(' + activeCodonIndex + ', \'' + choices[c] + '\')">' + escapeHtml(choices[c]) + '</button>';
         }
         codonHtml += '</div>';
         codonHtml += '</div>';
@@ -586,12 +653,12 @@
           for (var j = 0; j < choices2.length; j++) {
             var aa = choices2[j];
             var activeClass = state.roundState.answers[c2] === aa ? ' success' : '';
-            codonHtml += '<button type="button" class="' + activeClass + '" onclick="selectTranslationAA(' + c2 + ', \'' + aa + '\')">' + escapeHtml(aa) + '</button>';
+            codonHtml += '<button type="button" class="' + activeClass + '" ' + (state.isSaving ? 'disabled' : '') + ' onclick="selectTranslationAA(' + c2 + ', \'' + aa + '\')">' + escapeHtml(aa) + '</button>';
           }
           codonHtml += '</div>';
           codonHtml += '</div>';
         }
-        codonHtml += '<button type="button" class="success" onclick="checkTranslationFull()">Check sequence</button>';
+        codonHtml += '<button type="button" class="success" ' + (state.isSaving ? 'disabled' : '') + ' onclick="checkTranslationFull()">Check sequence</button>';
       }
 
       var hintButtonLabel = state.showHint ? 'Hide hint' : 'Show hint';
@@ -602,7 +669,7 @@
       return (
         '<div>' +
           '<div class="pill-row">' +
-            '<button type="button" class="ghost" onclick="toggleHint()">' + hintButtonLabel + '</button>' +
+            '<button type="button" class="ghost" ' + (state.isSaving ? 'disabled' : '') + ' onclick="toggleHint()">' + hintButtonLabel + '</button>' +
             '<span class="muted">Tips and hints do not reduce score.</span>' +
           '</div>' +
           hintBlock +
@@ -615,7 +682,7 @@
       var optionsHtml = '';
       for (var i = 0; i < round.options.length; i++) {
         optionsHtml +=
-          '<button type="button" class="trait-option" onclick="selectProteinMatch(' + i + ')">' +
+          '<button type="button" class="trait-option" ' + (state.isSaving ? 'disabled' : '') + ' onclick="selectProteinMatch(' + i + ')">' +
             '<div><strong>' + escapeHtml(round.options[i].protein) + '</strong></div>' +
             '<div>' + escapeHtml(round.options[i].trait) + '</div>' +
           '</button>';
@@ -629,7 +696,7 @@
         '<div>' +
           '<p><strong>Select the correct trait.</strong></p>' +
           '<div class="pill-row">' +
-            '<button type="button" class="ghost" onclick="toggleHint()">' + hintButtonLabel + '</button>' +
+            '<button type="button" class="ghost" ' + (state.isSaving ? 'disabled' : '') + ' onclick="toggleHint()">' + hintButtonLabel + '</button>' +
             '<span class="muted">Wrong guesses are allowed and do not reduce points.</span>' +
           '</div>' +
           hintBlock +
@@ -641,16 +708,11 @@
     function renderEndScreen() {
       var completed = state.endReason !== 'quit' && state.roundsCompleted >= TOTAL_ROUNDS;
       var status = completed ? 'Completed' : 'Incomplete';
-      var percent = state.score > 0 ? Math.round((state.score / TOTAL_ROUNDS) * 1000) / 10 : 0;
+      var percent = state.score >= 0 ? Math.round((state.score / TOTAL_ROUNDS) * 1000) / 10 : 0;
       var timeSpent = Math.max(0, Math.floor((Date.now() - state.startTime) / 1000));
 
       var review = '';
-      var missed = [];
-      for (var i = 0; i < state.roundResults.length; i++) {
-        if (!state.roundResults[i].correct) {
-          missed.push(state.roundResults[i].type);
-        }
-      }
+      var missed = getMissedRoundsForReview();
       if (missed.length > 0) {
         review = '<h3>Missed-skills review</h3><ul>';
         for (var m = 0; m < missed.length; m++) {
@@ -677,7 +739,7 @@
       );
     }
 
-    function renderCodonWheel() {
+    function renderCodonWheelLegacy() {
       var list = '';
       Object.keys(CODON_MAP).forEach(function (codon) {
         list += '<div class="codon-cell"><span class="codon">' + codon + '</span> → <strong>' + CODON_MAP[codon] + '</strong></div>';
@@ -685,7 +747,7 @@
       codonWheelCells.innerHTML = '<div class="codon-list">' + list + '</div>';
     }
 
-    function onRoundComplete(result) {
+    function onRoundCompleteLegacy(result) {
       var round = currentRound();
       state.score += 1;
       state.roundsCompleted += 1;
@@ -721,20 +783,67 @@
       render();
     }
 
-    function finishAttempt(isFinalSubmit, isQuitEarly) {
-      if (state.isSaving && !isFinalSubmit) {
+    function queueSave(isFinalSubmit, isQuitEarly) {
+      if (isFinalSubmit) {
+        pendingSaveType = isQuitEarly ? 'quit' : 'final';
+        if (saveDebounceTimer) {
+          clearTimeout(saveDebounceTimer);
+          saveDebounceTimer = null;
+        }
+        flushPendingSave();
         return;
       }
-      state.isSaving = true;
-      state.saveStatus = isQuitEarly ? 'Saving incomplete attempt...' : 'Saving attempt...';
 
+      pendingSaveType = 'autosave';
+      if (saveDebounceTimer) {
+        clearTimeout(saveDebounceTimer);
+      }
+      saveDebounceTimer = setTimeout(function () {
+        flushPendingSave();
+      }, AUTO_SAVE_DEBOUNCE_MS);
+    }
+
+    function flushPendingSave() {
+      if (!pendingSaveType || state.isSaving) {
+        return;
+      }
+      var saveType = pendingSaveType;
+      pendingSaveType = '';
+
+      if (saveType === 'autosave') {
+        sendSave(false, false);
+        return;
+      }
+
+      if (saveType === 'quit') {
+        sendSave(true, true);
+        return;
+      }
+
+      sendSave(true, false);
+    }
+
+    function sendSave(isFinalSubmit, isQuitEarly) {
+      if (state.isSaving) {
+        queueSave(isFinalSubmit, isQuitEarly);
+        return;
+      }
+      if (!state.attemptId && !isFinalSubmit) {
+        return;
+      }
+
+      state.isSaving = true;
+      state.saveStatus = isQuitEarly ? 'Saving final attempt...' : (isFinalSubmit ? 'Saving final attempt...' : 'Saving progress...');
       var completed = isFinalSubmit && state.roundsCompleted >= TOTAL_ROUNDS && !isQuitEarly;
+      var requestId = ++saveRequestCounter;
+      latestSaveRequest = requestId;
+
       var payload = {
         attemptId: state.attemptId,
         firstName: state.firstName,
         period: state.period,
         score: state.score,
-        percent: state.score > 0 ? Math.round((state.score / TOTAL_ROUNDS) * 1000) / 10 : 0,
+        percent: state.score >= 0 ? Math.round((state.score / TOTAL_ROUNDS) * 1000) / 10 : 0,
         completedStatus: completed ? 'Completed' : 'Incomplete',
         roundsCompleted: state.roundsCompleted,
         totalRounds: TOTAL_ROUNDS,
@@ -749,17 +858,24 @@
 
       if (isQuitEarly) {
         payload.completedStatus = 'Incomplete';
-        payload.isAutosave = true;
-        payload.isFinalSubmit = false;
+        payload.isAutosave = false;
+        payload.isFinalSubmit = true;
       }
 
       google.script.run
         .withFailureHandler(function (error) {
+          if (requestId !== latestSaveRequest) {
+            return;
+          }
           state.isSaving = false;
           state.saveStatus = 'Save failed: ' + (error && error.message ? error.message : 'Unknown error');
           render();
+          flushPendingSave();
         })
         .withSuccessHandler(function (result) {
+          if (requestId !== latestSaveRequest) {
+            return;
+          }
           state.isSaving = false;
           state.saveStatus = 'Saved. Best Score: ' + result.bestScore + ' (' + result.bestPercent + '%)';
           if (isQuitEarly) {
@@ -769,8 +885,142 @@
             state.endReason = completed ? 'completed' : 'incomplete';
           }
           render();
+          flushPendingSave();
         })
         .saveAttempt(payload);
+    }
+
+    function onRoundComplete(result) {
+      if (!result || result.correct !== true) {
+        return;
+      }
+      var round = currentRound();
+      state.score += 1;
+      state.roundsCompleted += 1;
+
+      state.roundResults.push({
+        round: state.currentRoundIndex + 1,
+        type: round.type,
+        prompt: round.prompt,
+        chain: result.chain || '',
+        selectedProtein: result.protein || '',
+        selectedTrait: result.trait || '',
+        response: result.responseText || '',
+        expected: result.expected || '',
+        submitted: result.submitted || '',
+        expectedProtein: result.expectedProtein || '',
+        expectedTrait: result.expectedTrait || '',
+        submittedProtein: result.submittedProtein || '',
+        submittedTrait: result.submittedTrait || '',
+        attempts: state.roundState.attempts || 0,
+        correct: true
+      });
+
+      state.responses.push({
+        round: state.currentRoundIndex + 1,
+        type: round.type,
+        response: result.responseText || ''
+      });
+
+      setFeedback('Correct. Great progress.', 'ok');
+      state.awaitNext = true;
+      queueSave(false, false);
+      render();
+    }
+
+    function renderCodonWheel() {
+      if (!codonWheelCells) {
+        return;
+      }
+      var list = '';
+      var round = currentRound();
+      if (!round || round.type !== 'translation' || !Array.isArray(round.codons)) {
+        codonWheelCells.innerHTML = '<p class="muted">Codon wheel is only available for translation rounds.</p>';
+        return;
+      }
+      for (var i = 0; i < round.codons.length; i++) {
+        var codon = round.codons[i];
+        var aa = CODON_MAP[codon] || 'Unknown';
+        list += '<div class="codon-cell"><span class="codon">' + escapeHtml(codon) + '</span> → <strong>' + escapeHtml(aa) + '</strong></div>';
+      }
+      if (!list) {
+        codonWheelCells.innerHTML = '<p class="muted">No codons found for this round.</p>';
+        return;
+      }
+      codonWheelCells.innerHTML = '<div class="codon-list">' + list + '</div>';
+    }
+
+    function getMissedRoundsForReview() {
+      var list = [];
+      for (var i = 0; i < ROUND_DEFINITIONS.length; i++) {
+        var round = ROUND_DEFINITIONS[i];
+        var result = getRoundResultByRoundNumber(i + 1);
+        if (result && result.correct) {
+          continue;
+        }
+        list.push(formatMissedRoundForReview(round, result, i + 1));
+      }
+      return list;
+    }
+
+    function getRoundResultByRoundNumber(roundNumber) {
+      for (var i = 0; i < state.roundResults.length; i++) {
+        if (state.roundResults[i].round === roundNumber) {
+          return state.roundResults[i];
+        }
+      }
+      return null;
+    }
+
+    function getExpectedAnswerForRound(round) {
+      if (!round) {
+        return '';
+      }
+      if (round.type === 'dna' || round.type === 'transcription') {
+        return round.answer || '';
+      }
+      if (round.type === 'translation') {
+        return (round.answers || []).join('-');
+      }
+      if (round.type === 'protein') {
+        return round.correctTrait || '';
+      }
+      return '';
+    }
+
+    function formatMissedRoundForReview(round, result, roundNumber) {
+      var expected = getExpectedAnswerForRound(round);
+      var submitted = 'Not answered';
+      var expectedLabel = 'expected "' + expected + '"';
+      var submittedLabel = '';
+
+      if (round.type === 'protein') {
+        expectedLabel = 'Expected: ' + round.chain + ' → trait "' + expected + '"';
+        var expectedProtein = getCorrectProteinForRound(round) || 'Unknown';
+        expectedLabel += ' by ' + expectedProtein;
+        if (result) {
+          submitted = result.selectedTrait ? ('trait "' + result.selectedTrait + '"') : (result.submitted || 'Not answered');
+          if (result.submittedProtein) {
+            submitted += ' by ' + result.submittedProtein;
+          }
+        }
+      } else {
+        if (result && result.submitted) {
+          submitted = result.submitted;
+        }
+        if (result && result.expected) {
+          expected = result.expected;
+        }
+        if (expected) {
+          expectedLabel = 'expected "' + expected + '"';
+        }
+      }
+
+      if (!submittedLabel) {
+        submittedLabel = 'You entered: ' + submitted;
+      }
+
+      return round.title + ' (Round ' + roundNumber + ', ' + round.type + ') — ' + expectedLabel + '. ' + submittedLabel + '.';
     }
 
     function setExitGuard() {
