@@ -545,7 +545,6 @@
         feedback: '',
         feedbackKind: '',
         feedbackIcon: '',
-        isOnline: true,
         saveQueued: false,
         retryNeeded: false,
         showHint: false,
@@ -657,7 +656,7 @@
       return (
         '<section class="screen">' +
           '<h1>Pirate Protein Factory</h1>' +
-          '<p class="muted">A short iPad-friendly review game for this pathway: DNA → mRNA → amino acid chain → protein → trait.</p>' +
+          '<p class="muted">A short iPad-friendly review game for this pathway: DNA -> mRNA -> amino acid chain -> protein -> trait.</p>' +
           '<div class="top-note"><strong>Required</strong>: First name and class period are needed for score saving.</div>' +
           '<div class="field">' +
             '<label for="first-name">First Name</label>' +
@@ -1066,23 +1065,12 @@
       }
       var round = currentRound();
       var isCorrect = result.correct === true;
-      var existingIndex = -1;
-      for (var i = 0; i < state.roundResults.length; i++) {
-        if (state.roundResults[i].round === state.currentRoundIndex + 1) {
-          existingIndex = i;
-          break;
-        }
-      }
+      var roundNumber = getCurrentRoundNumber();
+      var existingIndex = getRoundResultIndexByRoundNumber(roundNumber);
+      var wasCorrectBefore = isRoundCorrect(roundNumber);
 
       if (isCorrect) {
-        var alreadyCounted = false;
-        for (var j = 0; j < state.roundResults.length; j++) {
-          if (state.roundResults[j].round === state.currentRoundIndex + 1 && state.roundResults[j].correct) {
-            alreadyCounted = true;
-            break;
-          }
-        }
-        if (!alreadyCounted) {
+        if (!wasCorrectBefore) {
           state.score += 1;
           state.roundsCompleted += 1;
         }
@@ -1090,7 +1078,7 @@
       }
 
       var resultEntry = {
-        round: state.currentRoundIndex + 1,
+        round: roundNumber,
         type: round.type,
         prompt: round.prompt,
         chain: result.chain || '',
@@ -1112,9 +1100,9 @@
         state.roundResults.push(resultEntry);
       }
 
-      if (isCorrect || !state.roundResults.some(function (entry) { return entry.round === state.currentRoundIndex + 1 && entry.correct; })) {
+      if (isCorrect || !wasCorrectBefore) {
         state.responses.push({
-          round: state.currentRoundIndex + 1,
+          round: roundNumber,
           type: round.type,
           response: result.responseText || ''
         });
@@ -1125,6 +1113,28 @@
         queueSave(false, false);
       }
       render();
+    }
+
+    function getCurrentRoundNumber() {
+      return state.currentRoundIndex + 1;
+    }
+
+    function getRoundResultIndexByRoundNumber(roundNumber) {
+      for (var i = 0; i < state.roundResults.length; i++) {
+        if (state.roundResults[i].round === roundNumber) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    function isRoundCorrect(roundNumber) {
+      for (var i = 0; i < state.roundResults.length; i++) {
+        if (state.roundResults[i].round === roundNumber && state.roundResults[i].correct) {
+          return true;
+        }
+      }
+      return false;
     }
 
     function renderCodonWheel() {
@@ -1156,7 +1166,7 @@
         list +=
           '<div class="codon-cell"><span class="codon">' +
           escapeHtml(codon) +
-          '</span> → <strong>' +
+          '</span> -> <strong>' +
           escapeHtml(uniqueChoices.join(' / ')) +
           '</strong></div>';
       }
@@ -1181,12 +1191,11 @@
     }
 
     function getRoundResultByRoundNumber(roundNumber) {
-      for (var i = 0; i < state.roundResults.length; i++) {
-        if (state.roundResults[i].round === roundNumber) {
-          return state.roundResults[i];
-        }
+      var index = getRoundResultIndexByRoundNumber(roundNumber);
+      if (index < 0) {
+        return null;
       }
-      return null;
+      return state.roundResults[index];
     }
 
     function getExpectedAnswerForRound(round) {
@@ -1270,3 +1279,4 @@
     render();
   })();
 </script>
+
