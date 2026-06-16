@@ -6,6 +6,9 @@
     const TOTAL_ROUNDS = 8;
     const AUTO_SAVE_DEBOUNCE_MS = 1250;
     const INPUT_COOLDOWN_MS = 350;
+    const ACTION_COOLDOWN_MS = 180;
+    const SAVE_RETRY_LIMIT = 3;
+    const SAVE_RETRY_DELAY_MS = 1200;
 
     const CODON_MAP = {
       AUG: 'Met',
@@ -126,11 +129,14 @@
     ];
 
     let saveDebounceTimer = null;
+    let saveRetryTimer = null;
+    let saveRetryAttempt = 0;
     let pendingSaveType = '';
     let saveRequestCounter = 0;
     let latestSaveRequest = 0;
     let isTransitionInProgress = false;
     let inputCooldownUntil = 0;
+    let actionCooldownUntil = 0;
 
     let state = createGameState();
 
@@ -148,13 +154,11 @@
         alert('Please enter a first name.');
         return;
       }
-      state = createGameState();
-      state.firstName = firstName;
-      state.period = period;
-      state.screen = 'tutorial';
-      state.attemptId = makeAttemptId();
-      state.startTime = Date.now();
-      clearPendingSave();
+      startAttemptSession({
+        firstName: firstName,
+        period: period || '1',
+        screen: 'tutorial'
+      });
       render();
     };
 
@@ -188,18 +192,21 @@
         return;
       }
       state.roundState.input = state.roundState.input + value;
+      state.feedback = '';
       render();
     };
 
     window.clearInput = function () {
       if (isInputBlocked()) return;
       state.roundState.input = '';
+      state.feedback = '';
       render();
     };
 
     window.backspace = function () {
       if (isInputBlocked()) return;
       state.roundState.input = state.roundState.input.slice(0, -1);
+      state.feedback = '';
       render();
     };
 
@@ -210,7 +217,19 @@
       state.roundState.attempts = (state.roundState.attempts || 0) + 1;
 
       if (state.roundState.input.length !== round.answer.length) {
-        setFeedback('Check the length and use only DNA or RNA bases.', 'bad');
+        setFeedback(
+          'Round ' + (state.currentRoundIndex + 1) + ': check the length and use only valid DNA/RNA bases.',
+          'bad'
+        );
+        onRoundComplete({
+          responseText: state.roundState.input,
+          chain: '',
+          protein: '',
+          trait: '',
+          correct: false,
+          expected: round.answer,
+          submitted: state.roundState.input
+        });
         return;
       }
       if (state.roundState.input === round.answer) {
@@ -225,7 +244,33 @@
         });
         return;
       }
-      setFeedback('Try again. Review the pairing or RNA rule for this round.', 'bad');
+
+      var mismatchPosition = 0;
+      for (var i = 0; i < round.answer.length; i++) {
+        if (state.roundState.input[i] !== round.answer[i]) {
+          mismatchPosition = i + 1;
+          break;
+        }
+      }
+      setFeedback(
+        'Round ' +
+          (state.currentRoundIndex + 1) +
+          ': check position ' +
+          mismatchPosition +
+          '. Pairing expected "' +
+          round.answer +
+          '" for this round.',
+        'bad'
+      );
+      onRoundComplete({
+        responseText: state.roundState.input,
+        chain: '',
+        protein: '',
+        trait: '',
+        correct: false,
+        expected: round.answer,
+        submitted: state.roundState.input
+      });
     };
 
     window.selectTranslationAA = function (index, value) {
@@ -239,7 +284,26 @@
       if (round.mode === 'perCodon') {
         var expected = round.answers[index];
         if (value !== expected) {
-          setFeedback('No problem. Try again for this codon.', 'bad');
+          setFeedback(
+            'Round ' +
+              (state.currentRoundIndex + 1) +
+              ', codon ' +
+              (index + 1) +
+              ' mismatch. Expected "' +
+              expected +
+              '".',
+            'bad'
+          );
+          onRoundComplete({
+            responseText: state.roundState.answers.join('-'),
+            chain: state.roundState.answers.join('-'),
+            protein: '',
+            trait: '',
+            correct: false,
+            expected: round.answers.join('-'),
+            submitted: state.roundState.answers.join('-')
+          });
+          render();
           return;
         }
 
@@ -285,12 +349,30 @@
       }
 
       state.roundState.attempts = (state.roundState.attempts || 0) + 1;
+      var mismatchIndex = -1;
       for (var i = 0; i < round.answers.length; i++) {
         if (state.roundState.answers[i] !== round.answers[i]) {
-          setFeedback('Try again. Check the full chain before moving on.', 'bad');
-          return;
+          mismatchIndex = i;
+          break;
         }
       }
+
+      if (mismatchIndex >= 0) {
+        setFeedback(
+          'Round ' + (state.currentRoundIndex + 1) + ', codon ' + (mismatchIndex + 1) + ' mismatch.',
+          'bad'
+        );
+        onRoundComplete({
+          responseText: state.roundState.answers.join('-'),
+          chain: state.roundState.answers.join('-'),
+          protein: '',
+          trait: '',
+          correct: false,
+          expected: round.answers.join('-'),
+          submitted: state.roundState.answers.join('-')
+        });
+          return;
+        }
 
       onRoundComplete({
         responseText: state.roundState.answers.join('-'),
@@ -328,13 +410,27 @@
           submittedTrait: selected.trait
         });
       } else {
-        setFeedback('No. That is not the correct trait for this chain.', 'bad');
+        setFeedback('Round ' + (state.currentRoundIndex + 1) + ': wrong trait for chain ' + round.chain + '.', 'bad');
+        onRoundComplete({
+          responseText: round.chain,
+          chain: round.chain,
+          protein: selected.protein,
+          trait: selected.trait,
+          correct: false,
+          expected: round.correctTrait,
+          submitted: selected.trait,
+          expectedProtein: getCorrectProteinForRound(round),
+          expectedTrait: round.correctTrait,
+          submittedProtein: selected.protein,
+          submittedTrait: selected.trait
+        });
       }
     };
 
     window.proceedToNextRound = function () {
-      if (state.isSaving || isTransitionInProgress || Date.now() < inputCooldownUntil) return;
+      if (state.isSaving || isTransitionInProgress || Date.now() < inputCooldownUntil || Date.now() < actionCooldownUntil) return;
       isTransitionInProgress = true;
+      setActionCooldown();
       try {
         if (state.currentRoundIndex < TOTAL_ROUNDS - 1) {
           state.currentRoundIndex++;
@@ -344,9 +440,13 @@
           state.awaitNext = false;
           state.showHint = false;
           setInputCooldown();
+          if (state.currentRoundIndex < TOTAL_ROUNDS - 1) {
+            queueSave(false, false);
+          }
           render();
         } else {
           state.screen = 'end';
+          state.endReason = state.roundsCompleted >= TOTAL_ROUNDS ? 'completed' : 'incomplete';
           queueSave(true, false);
           setInputCooldown();
           render();
@@ -361,36 +461,29 @@
       state.endReason = 'quit';
       state.screen = 'end';
       queueSave(true, true);
+      setActionCooldown();
       render();
     };
 
     window.replayGame = function () {
-      state = createGameState();
-      if (window.closeCodonWheel) {
-        window.closeCodonWheel();
-      }
-      clearPendingSave();
-
-      var firstNameInput = document.getElementById('first-name');
-      var periodSelect = document.getElementById('period');
-      if (firstNameInput) {
-        firstNameInput.value = '';
-      }
-      if (periodSelect) {
-        periodSelect.value = '1';
-      }
-
+      startAttemptSession({
+        firstName: '',
+        period: '1',
+        screen: 'start',
+        clearStartFields: true
+      });
       render();
     };
 
     window.openCodonWheel = function () {
-      if (state.isSaving) return;
+      if (state.isSaving || isInputBlocked()) return;
       var round = currentRound();
       if (!round || round.type !== 'translation') {
         setFeedback('Codon wheel is only available during translation rounds.', 'bad');
         return;
       }
       renderCodonWheel(round);
+      setActionCooldown();
       if (codonModal && codonModal.showModal) {
         codonModal.showModal();
       }
@@ -401,6 +494,32 @@
         codonModal.close();
       }
     };
+
+    function startAttemptSession(options) {
+      options = options || {};
+      state = createGameState();
+      state.firstName = options.firstName || '';
+      state.period = options.period || '1';
+      state.screen = options.screen || 'start';
+      state.attemptId = makeAttemptId();
+      state.startTime = Date.now();
+      clearPendingSave();
+      if (window.closeCodonWheel) {
+        window.closeCodonWheel();
+      }
+
+      if (options.clearStartFields) {
+        var firstNameInput = document.getElementById('first-name');
+        var periodSelect = document.getElementById('period');
+        if (firstNameInput) {
+          firstNameInput.value = '';
+        }
+        if (periodSelect) {
+          periodSelect.value = '1';
+        }
+      }
+      return state;
+    }
 
     function currentRound() {
       return ROUND_DEFINITIONS[state.currentRoundIndex];
@@ -425,6 +544,10 @@
         roundState: initRoundState(ROUND_DEFINITIONS[0]),
         feedback: '',
         feedbackKind: '',
+        feedbackIcon: '',
+        isOnline: true,
+        saveQueued: false,
+        retryNeeded: false,
         showHint: false,
         awaitNext: false,
         isSaving: false,
@@ -434,20 +557,40 @@
     }
 
     function isInputBlocked() {
-      return state.screen !== 'game' || state.awaitNext || state.isSaving || isTransitionInProgress || Date.now() < inputCooldownUntil;
+      return (
+        state.screen !== 'game' ||
+        state.awaitNext ||
+        state.isSaving ||
+        isTransitionInProgress ||
+        Date.now() < inputCooldownUntil ||
+        Date.now() < actionCooldownUntil
+      );
     }
 
     function setInputCooldown() {
       inputCooldownUntil = Date.now() + INPUT_COOLDOWN_MS;
     }
 
+    function setActionCooldown() {
+      actionCooldownUntil = Date.now() + ACTION_COOLDOWN_MS;
+    }
+
     function clearPendingSave() {
       if (saveDebounceTimer) {
         clearTimeout(saveDebounceTimer);
       }
+      if (saveRetryTimer) {
+        clearTimeout(saveRetryTimer);
+      }
       saveDebounceTimer = null;
+      saveRetryTimer = null;
+      saveRetryAttempt = 0;
       pendingSaveType = '';
+      state.saveQueued = false;
+      state.retryNeeded = false;
+      state.isSaving = false;
       inputCooldownUntil = 0;
+      actionCooldownUntil = 0;
     }
 
     function getCorrectProteinForRound(round) {
@@ -557,8 +700,9 @@
         return (
           '<section class="screen">' +
             '<h2>Great job on ' + escapeHtml(round.title) + '</h2>' +
-            '<div class="feedback ok">' + state.feedback + '</div>' +
+            '<div class="feedback ok" aria-live="polite" role="status">' + escapeHtml(state.feedback) + '</div>' +
             nextBtn +
+            renderSaveBlock() +
           '</section>'
         );
       }
@@ -596,8 +740,11 @@
 
       html += '<div><button type="button" class="warn" ' + (state.isSaving ? 'disabled' : '') + ' onclick="quitEarly()">Quit / Exit</button></div>';
       if (state.feedback) {
-        html += '<div class="feedback ' + state.feedbackKind + '">' + escapeHtml(state.feedback) + '</div>';
+        html += '<div class="feedback ' + state.feedbackKind + '" aria-live="polite" role="status">' +
+          (state.feedbackIcon ? state.feedbackIcon + ' ' : '') + escapeHtml(state.feedback) +
+        '</div>';
       }
+      html += renderSaveBlock();
       html += '</section>';
       return html;
     }
@@ -739,51 +886,51 @@
       );
     }
 
-    function renderCodonWheelLegacy() {
-      var list = '';
-      Object.keys(CODON_MAP).forEach(function (codon) {
-        list += '<div class="codon-cell"><span class="codon">' + codon + '</span> → <strong>' + CODON_MAP[codon] + '</strong></div>';
-      });
-      codonWheelCells.innerHTML = '<div class="codon-list">' + list + '</div>';
-    }
-
-    function onRoundCompleteLegacy(result) {
-      var round = currentRound();
-      state.score += 1;
-      state.roundsCompleted += 1;
-
-      state.roundResults.push({
-        round: state.currentRoundIndex + 1,
-        type: round.type,
-        prompt: round.prompt,
-        chain: result.chain || '',
-        selectedProtein: result.protein || '',
-        selectedTrait: result.trait || '',
-        response: result.responseText || '',
-        attempts: state.roundState.attempts || 0,
-        correct: true
-      });
-
-      state.responses.push({
-        round: state.currentRoundIndex + 1,
-        type: round.type,
-        response: result.responseText || ''
-      });
-
-      setFeedback('Correct. Great progress.', 'ok');
-      state.awaitNext = true;
-      state.saveStatus = 'Saving progress...';
-      finishAttempt(false, false);
-      render();
-    }
-
     function setFeedback(message, kind) {
       state.feedback = message;
       state.feedbackKind = kind || 'bad';
+      state.feedbackIcon = kind === 'ok' ? '[ok]' : kind === 'bad' ? '[review]' : '';
       render();
     }
 
+    window.retrySave = function () {
+      if (!state.retryNeeded) {
+        return;
+      }
+      state.retryNeeded = false;
+      state.saveQueued = true;
+      queueSave(false, false);
+      render();
+    };
+
+    function renderSaveBlock() {
+      var items = [];
+      if (state.saveQueued) {
+        items.push('Save queued...');
+      }
+      if (state.saveStatus) {
+        items.push(escapeHtml(state.saveStatus));
+      }
+      if (state.retryNeeded) {
+        items.push('<button type="button" class="ghost" onclick="retrySave()">Retry save</button>');
+      }
+      if (items.length === 0) {
+        return '';
+      }
+      return '<div class="hint" aria-live="polite" role="status">' + items.join(' ') + '</div>';
+    }
+
     function queueSave(isFinalSubmit, isQuitEarly) {
+      if (state.screen === 'start') {
+        return;
+      }
+      state.saveQueued = true;
+      state.retryNeeded = false;
+      if (saveRetryTimer) {
+        clearTimeout(saveRetryTimer);
+        saveRetryTimer = null;
+      }
+
       if (isFinalSubmit) {
         pendingSaveType = isQuitEarly ? 'quit' : 'final';
         if (saveDebounceTimer) {
@@ -795,6 +942,7 @@
       }
 
       pendingSaveType = 'autosave';
+      state.saveQueued = true;
       if (saveDebounceTimer) {
         clearTimeout(saveDebounceTimer);
       }
@@ -809,6 +957,7 @@
       }
       var saveType = pendingSaveType;
       pendingSaveType = '';
+      state.saveQueued = false;
 
       if (saveType === 'autosave') {
         sendSave(false, false);
@@ -831,12 +980,20 @@
       if (!state.attemptId && !isFinalSubmit) {
         return;
       }
-
+      state.retryNeeded = false;
       state.isSaving = true;
-      state.saveStatus = isQuitEarly ? 'Saving final attempt...' : (isFinalSubmit ? 'Saving final attempt...' : 'Saving progress...');
+
+      state.saveStatus =
+        isQuitEarly || isFinalSubmit
+          ? 'Saving final attempt...'
+          : 'Saving progress...';
       var completed = isFinalSubmit && state.roundsCompleted >= TOTAL_ROUNDS && !isQuitEarly;
       var requestId = ++saveRequestCounter;
       latestSaveRequest = requestId;
+      var isAutosave = !isFinalSubmit;
+      if (isQuitEarly) {
+        isAutosave = false;
+      }
 
       var payload = {
         attemptId: state.attemptId,
@@ -849,7 +1006,7 @@
         totalRounds: TOTAL_ROUNDS,
         timeSpentSeconds: Math.max(0, Math.floor((Date.now() - state.startTime) / 1000)),
         currentRound: state.currentRoundIndex + 1,
-        isAutosave: !isFinalSubmit,
+        isAutosave: isAutosave,
         isFinalSubmit: Boolean(isFinalSubmit),
         responses: state.responses,
         roundResults: state.roundResults,
@@ -868,7 +1025,19 @@
             return;
           }
           state.isSaving = false;
-          state.saveStatus = 'Save failed: ' + (error && error.message ? error.message : 'Unknown error');
+          state.saveStatus = 'Save failed. ' + (error && error.message ? error.message : 'Unknown error');
+          state.retryNeeded = true;
+          saveRetryAttempt += 1;
+          if (saveRetryAttempt <= SAVE_RETRY_LIMIT) {
+            state.saveStatus += ' Retrying ' + saveRetryAttempt + ' of ' + SAVE_RETRY_LIMIT + '...';
+            saveRetryTimer = setTimeout(function () {
+              if (!state.saveQueued && !state.isSaving) {
+                queueSave(isFinalSubmit, isQuitEarly);
+              }
+            }, SAVE_RETRY_DELAY_MS);
+          } else {
+            state.saveStatus += ' Check connection and try again.';
+          }
           render();
           flushPendingSave();
         })
@@ -877,6 +1046,7 @@
             return;
           }
           state.isSaving = false;
+          saveRetryAttempt = 0;
           state.saveStatus = 'Saved. Best Score: ' + result.bestScore + ' (' + result.bestPercent + '%)';
           if (isQuitEarly) {
             state.endReason = 'quit';
@@ -891,14 +1061,35 @@
     }
 
     function onRoundComplete(result) {
-      if (!result || result.correct !== true) {
+      if (!result) {
         return;
       }
       var round = currentRound();
-      state.score += 1;
-      state.roundsCompleted += 1;
+      var isCorrect = result.correct === true;
+      var existingIndex = -1;
+      for (var i = 0; i < state.roundResults.length; i++) {
+        if (state.roundResults[i].round === state.currentRoundIndex + 1) {
+          existingIndex = i;
+          break;
+        }
+      }
 
-      state.roundResults.push({
+      if (isCorrect) {
+        var alreadyCounted = false;
+        for (var j = 0; j < state.roundResults.length; j++) {
+          if (state.roundResults[j].round === state.currentRoundIndex + 1 && state.roundResults[j].correct) {
+            alreadyCounted = true;
+            break;
+          }
+        }
+        if (!alreadyCounted) {
+          state.score += 1;
+          state.roundsCompleted += 1;
+        }
+        state.awaitNext = true;
+      }
+
+      var resultEntry = {
         round: state.currentRoundIndex + 1,
         type: round.type,
         prompt: round.prompt,
@@ -913,18 +1104,26 @@
         submittedProtein: result.submittedProtein || '',
         submittedTrait: result.submittedTrait || '',
         attempts: state.roundState.attempts || 0,
-        correct: true
-      });
+        correct: isCorrect
+      };
+      if (existingIndex >= 0) {
+        state.roundResults[existingIndex] = resultEntry;
+      } else {
+        state.roundResults.push(resultEntry);
+      }
 
-      state.responses.push({
-        round: state.currentRoundIndex + 1,
-        type: round.type,
-        response: result.responseText || ''
-      });
+      if (isCorrect || !state.roundResults.some(function (entry) { return entry.round === state.currentRoundIndex + 1 && entry.correct; })) {
+        state.responses.push({
+          round: state.currentRoundIndex + 1,
+          type: round.type,
+          response: result.responseText || ''
+        });
+      }
 
-      setFeedback('Correct. Great progress.', 'ok');
-      state.awaitNext = true;
-      queueSave(false, false);
+      if (isCorrect) {
+        setFeedback('Correct. Great progress.', 'ok');
+        queueSave(false, false);
+      }
       render();
     }
 
@@ -936,12 +1135,30 @@
       var round = currentRound();
       if (!round || round.type !== 'translation' || !Array.isArray(round.codons)) {
         codonWheelCells.innerHTML = '<p class="muted">Codon wheel is only available for translation rounds.</p>';
+        setFeedback('The codon wheel is only for translation rounds.', 'bad');
         return;
       }
       for (var i = 0; i < round.codons.length; i++) {
         var codon = round.codons[i];
-        var aa = CODON_MAP[codon] || 'Unknown';
-        list += '<div class="codon-cell"><span class="codon">' + escapeHtml(codon) + '</span> → <strong>' + escapeHtml(aa) + '</strong></div>';
+        var choices = Array.isArray(round.codonChoices[i]) ? round.codonChoices[i] : [];
+        if (!choices.length && CODON_MAP[codon]) {
+          choices = [CODON_MAP[codon]];
+        }
+        if (!choices.length) {
+          choices = ['Unknown'];
+        }
+        var uniqueChoices = [];
+        for (var c = 0; c < choices.length; c++) {
+          if (uniqueChoices.indexOf(choices[c]) === -1) {
+            uniqueChoices.push(choices[c]);
+          }
+        }
+        list +=
+          '<div class="codon-cell"><span class="codon">' +
+          escapeHtml(codon) +
+          '</span> → <strong>' +
+          escapeHtml(uniqueChoices.join(' / ')) +
+          '</strong></div>';
       }
       if (!list) {
         codonWheelCells.innerHTML = '<p class="muted">No codons found for this round.</p>';
@@ -995,9 +1212,9 @@
       var submittedLabel = '';
 
       if (round.type === 'protein') {
-        expectedLabel = 'Expected: ' + round.chain + ' → trait "' + expected + '"';
+        expectedLabel = 'Expected chain ' + round.chain + ' and trait "' + expected + '"';
         var expectedProtein = getCorrectProteinForRound(round) || 'Unknown';
-        expectedLabel += ' by ' + expectedProtein;
+        expectedLabel += ' with protein ' + expectedProtein;
         if (result) {
           submitted = result.selectedTrait ? ('trait "' + result.selectedTrait + '"') : (result.submitted || 'Not answered');
           if (result.submittedProtein) {
@@ -1012,15 +1229,21 @@
           expected = result.expected;
         }
         if (expected) {
-          expectedLabel = 'expected "' + expected + '"';
+          expectedLabel = 'Expected "' + expected + '"';
+        }
+        if (round.type === 'translation') {
+          expectedLabel = 'Expected chain "' + (expected || '') + '"';
+        }
+        if (round.type === 'dna' || round.type === 'transcription') {
+          expectedLabel = 'Expected result "' + (expected || '') + '"';
         }
       }
 
       if (!submittedLabel) {
-        submittedLabel = 'You entered: ' + submitted;
+        submittedLabel = 'Submitted: ' + submitted;
       }
 
-      return round.title + ' (Round ' + roundNumber + ', ' + round.type + ') — ' + expectedLabel + '. ' + submittedLabel + '.';
+      return round.title + ' (Round ' + roundNumber + ', ' + round.type + ') - ' + expectedLabel + '. ' + submittedLabel + '.';
     }
 
     function setExitGuard() {

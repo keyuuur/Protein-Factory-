@@ -243,14 +243,14 @@ async function runWrongAttempt() {
 
   appendToRound(win, ['A', 'A', 'A', 'A']);
   win.checkCurrentRound();
-  assertContains(env.app.innerHTML, 'Try again', 'wrong attempt');
+  assertContains(env.app.innerHTML, 'check position', 'wrong attempt');
 
   await completeBaseRound(win, ['T', 'A', 'G', 'C']);
   assertContains(env.app.innerHTML, 'Round 2', 'wrong attempt');
 
   appendToRound(win, ['A', 'A', 'A']);
   win.checkCurrentRound();
-  assertContains(env.app.innerHTML, 'Check the length and use only DNA or RNA bases.', 'wrong attempt');
+  assertContains(env.app.innerHTML, 'check the length and use only valid DNA/RNA bases.', 'wrong attempt');
   await completeBaseRound(win, ['A', 'U', 'G']);
   assertContains(env.app.innerHTML, 'Round 3', 'wrong attempt');
 
@@ -411,7 +411,7 @@ async function runMissedReview() {
   assertContains(env.app.innerHTML, 'Round 2', 'missed review');
   assertContains(env.app.innerHTML, 'Round 3', 'missed review');
   assertContains(env.app.innerHTML, 'Round 8', 'missed review');
-  assertContains(env.app.innerHTML, 'expected', 'missed review');
+  assertContains(env.app.innerHTML, 'Expected', 'missed review');
 
   return { passed: true };
 }
