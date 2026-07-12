@@ -1,3 +1,10 @@
 client_secret_*.json
 token.json
 *.tmp
+
+# Generated local review/test artifacts
+.playwright-cli/
+output/
+web/test-results/
+web/playwright-report/
+web/blob-report/
