@@ -45,6 +45,17 @@ export default defineConfig({
       },
     },
     {
+      name: 'ipad-landscape',
+      use: {
+        browserName: 'webkit',
+        viewport: { width: 1024, height: 768 },
+        deviceScaleFactor: 2,
+        hasTouch: true,
+        isMobile: true,
+        userAgent: devices['iPad (gen 7)'].userAgent,
+      },
+    },
+    {
       name: 'phone-portrait',
       use: {
         browserName: 'chromium',

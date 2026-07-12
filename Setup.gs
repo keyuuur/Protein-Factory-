@@ -1,6 +1,14 @@
 var SPREADSHEET_ID_KEY = 'PPF_SPREADSHEET_ID';
 var ATTEMPTS_SHEET_NAME = 'Attempts';
 var BESTSHEET_NAME = 'BestScores';
+var PROTEIN_FACTORY_V3_SHEET_NAME = 'ProteinFactoryV3';
+
+var PROTEIN_FACTORY_V3_HEADERS = [
+  'Timestamp', 'Attempt ID', 'Student Name', 'Period', 'Demo', 'Production Rating',
+  'Independent Stages', 'Supported Stages', 'Repairs', 'Duration Seconds', 'Pair ID',
+  'Variant Effect', 'Seed', 'Content Version', 'Stage Results JSON', 'Misconceptions JSON',
+  'Transfer Results JSON', 'Full Payload JSON'
+];
 
 var ATTEMPTS_HEADERS = [
   'Timestamp',
@@ -52,7 +60,7 @@ function ensureSpreadsheet() {
     }
   }
 
-  var newSheet = SpreadsheetApp.create('Pirate Protein Factory - Data');
+  var newSheet = SpreadsheetApp.create('Protein Factory - Data');
   props.setProperty(SPREADSHEET_ID_KEY, newSheet.getId());
   ensureLoggingSheets(newSheet);
   return newSheet.getId();
@@ -62,6 +70,7 @@ function ensureLoggingSheets(spreadsheet) {
   var ss = spreadsheet || getSpreadsheet_();
   getOrCreateSheet_(ss, ATTEMPTS_SHEET_NAME, ATTEMPTS_HEADERS);
   getOrCreateSheet_(ss, BESTSHEET_NAME, BESTSHEET_HEADERS);
+  getOrCreateSheet_(ss, PROTEIN_FACTORY_V3_SHEET_NAME, PROTEIN_FACTORY_V3_HEADERS);
 }
 
 function getSpreadsheet_() {

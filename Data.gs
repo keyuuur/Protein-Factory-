@@ -37,6 +37,45 @@ function saveAttempt(payload) {
   }
 }
 
+function saveProteinFactoryAttemptV3(payload) {
+  if (String(payload.schemaVersion || '') !== 'protein-factory-attempt-v3') {
+    throw new Error('Unsupported payload schema.');
+  }
+  var attemptId = String(payload.attemptId || '').trim();
+  var studentName = String(payload.studentName || '').trim();
+  var classPeriod = String(payload.classPeriod || '').trim();
+  if (!attemptId || !studentName || !classPeriod) {
+    throw new Error('Attempt ID, student name, and period are required.');
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var spreadsheet = getSpreadsheet_();
+    var sheet = getOrCreateSheet_(spreadsheet, PROTEIN_FACTORY_V3_SHEET_NAME, PROTEIN_FACTORY_V3_HEADERS);
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      var existing = sheet.getRange(2, 2, lastRow - 1, 1).createTextFinder(attemptId).matchEntireCell(true).findNext();
+      if (existing) return { attemptId: attemptId, duplicate: true, row: existing.getRow() };
+    }
+
+    var stageResults = Array.isArray(payload.stageResults) ? payload.stageResults.slice(0, 8) : [];
+    var transferResults = Array.isArray(payload.transferResults) ? payload.transferResults.slice(0, 3) : [];
+    var misconceptions = Array.isArray(payload.misconceptions) ? payload.misconceptions : [];
+    sheet.appendRow([
+      new Date(), attemptId, studentName, classPeriod, Boolean(payload.isDemo),
+      String(payload.productionRating || ''), Number(payload.independentCount || 0),
+      Number(payload.supportCount || 0), Number(payload.repairs || 0),
+      Number(payload.durationSeconds || 0), String((payload.orderPair && payload.orderPair.pairId) || ''),
+      String(payload.variantEffect || ''), String(payload.seed || ''), String(payload.contentVersion || ''),
+      JSON.stringify(stageResults), JSON.stringify(misconceptions), JSON.stringify(transferResults), JSON.stringify(payload)
+    ]);
+    return { attemptId: attemptId, duplicate: false, row: sheet.getLastRow() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function normalizeAttemptPayload_(payload) {
   var firstName = String(payload.firstName || '').trim();
   if (!firstName) {

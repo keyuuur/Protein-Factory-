@@ -11,9 +11,9 @@ export function TutorialScreen({ onContinue }: TutorialScreenProps) {
       <section className="flow-panel">
         <div className="screen-kicker">
           <Dna aria-hidden="true" size={22} />
-          Factory briefing
+          Cell lab briefing
         </div>
-        <h1>Follow the recipe from DNA to trait.</h1>
+        <h1>Follow the information from DNA to protein function.</h1>
         <ol className="tutorial-list">
           {tutorialSteps.map((step) => (
             <li key={step}>{step}</li>

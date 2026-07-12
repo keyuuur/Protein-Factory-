@@ -1,11 +1,12 @@
-import { Anchor, Play, Presentation } from 'lucide-react'
+import { Dna, Play, Presentation } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { periodOptions } from '../game/content/rounds'
+import type { ReplayMode, SupportMode, TeacherSettings } from '../types'
 
 interface StartScreenProps {
   initialPeriod: string
-  onStart: (firstName: string, period: string, demoMode: boolean) => void
+  onStart: (firstName: string, period: string, demoMode: boolean, settings: TeacherSettings) => void
 }
 
 export function StartScreen({ initialPeriod, onStart }: StartScreenProps) {
@@ -15,6 +16,9 @@ export function StartScreen({ initialPeriod, onStart }: StartScreenProps) {
   )
   const [demoMode, setDemoMode] = useState(false)
   const [demoConfirm, setDemoConfirm] = useState('')
+  const [supportMode, setSupportMode] = useState<SupportMode>('standard')
+  const [replayMode, setReplayMode] = useState<ReplayMode>('full')
+  const [soundEnabled, setSoundEnabled] = useState(false)
   const demoConfirmed = demoMode && demoConfirm.trim().toUpperCase() === 'DEMO'
   const canStart = Boolean(period) && (demoConfirmed || firstName.trim().length > 0)
 
@@ -23,33 +27,28 @@ export function StartScreen({ initialPeriod, onStart }: StartScreenProps) {
     if (!canStart) {
       return
     }
-    onStart(firstName.trim(), period, demoConfirmed)
+    onStart(firstName.trim(), period, demoConfirmed, { replayMode, soundEnabled, supportMode })
   }
 
   return (
     <main className="start-screen" data-testid="start-screen">
       <section className="start-hero" aria-labelledby="game-title">
         <div className="brand-lockup">
-          <img src="/pirate-lab.svg" alt="" className="brand-mark" />
+          <Dna aria-hidden="true" className="brand-mark" size={64} />
           <div>
             <p className="eyebrow">9th grade biology review</p>
-            <h1 id="game-title">Pirate Protein Factory</h1>
+            <h1 id="game-title">Protein Factory</h1>
           </div>
         </div>
         <p className="start-copy">
-          Run the DNA dock, mRNA press, ribosome galley, and trait vault to ship a protein.
+          Work through a cell lab from DNA instructions to a tested protein function.
         </p>
-        <div className="start-badges" aria-label="Game overview">
-          <span>8 rounds</span>
-          <span>3D factory</span>
-          <span>Tap friendly</span>
-        </div>
       </section>
 
       <form className="captain-form" onSubmit={handleSubmit}>
         <div className="form-title">
-          <Anchor aria-hidden="true" size={22} />
-          <h2>Board the Factory</h2>
+          <Dna aria-hidden="true" size={22} />
+          <h2>Enter the Cell Lab</h2>
         </div>
 
         <label className="field-label" htmlFor="first-name">
@@ -107,11 +106,29 @@ export function StartScreen({ initialPeriod, onStart }: StartScreenProps) {
           ))}
         </select>
 
+        <details className="demo-disclosure teacher-settings">
+          <summary>Teacher settings</summary>
+          <label className="field-label" htmlFor="support-mode">Support</label>
+          <select id="support-mode" onChange={(event) => setSupportMode(event.target.value as SupportMode)} value={supportMode}>
+            <option value="standard">Standard</option>
+            <option value="guided">Guided</option>
+          </select>
+          <label className="field-label" htmlFor="replay-mode">Replay</label>
+          <select id="replay-mode" onChange={(event) => setReplayMode(event.target.value as ReplayMode)} value={replayMode}>
+            <option value="full">Full new production run</option>
+            <option value="targeted">Targeted transfer practice</option>
+          </select>
+          <label className="demo-toggle" htmlFor="sound-enabled">
+            <input checked={soundEnabled} id="sound-enabled" onChange={(event) => setSoundEnabled(event.target.checked)} type="checkbox" />
+            <span>Enable sound cues</span>
+          </label>
+        </details>
+
         <button className="primary-action" disabled={!canStart} type="submit">
           <Play aria-hidden="true" size={22} />
           Start game
         </button>
-        <p className="form-note">Practice results stay on this device only. They are not submitted to your teacher yet.</p>
+        <p className="form-note">Progress is saved on this device. Final results submit when a connection is available.</p>
       </form>
     </main>
   )

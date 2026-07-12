@@ -1,8 +1,8 @@
-import { Anchor } from 'lucide-react'
-import { useCallback, useMemo } from 'react'
-import { rounds, stationDefinitions, stationForRoundType } from '../game/content/rounds'
+import { Dna, Volume2, VolumeX } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import { stationForRoundType } from '../game/content/rounds'
 import type { GameAction } from '../game/simulation/gameReducer'
-import { selectActiveStationId, selectReplayChallengeStatus } from '../game/simulation/gameReducer'
+import { selectReplayChallengeStatus } from '../game/simulation/gameReducer'
 import { buildFactorySceneState } from '../render/adapters/sceneState'
 import { selectScore } from '../results/gameResults'
 import type { GameSessionState, ProteinOption, StationId } from '../types'
@@ -16,13 +16,18 @@ interface FactoryPlayScreenProps {
 }
 
 export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
+  const rounds = state.runManifest.rounds
   const currentRound = rounds[state.currentRoundIndex]
-  const activeStationId = selectActiveStationId(state)
   const activeStation = stationForRoundType(currentRound.type)
   const score = selectScore(state.roundResults)
-  const localStatus = state.saveStatus === 'saved-local' ? 'Saved on this device' : 'Practice on this device'
+  const localStatus = state.saveStatus === 'failed-local'
+    ? 'Device storage unavailable'
+    : state.saveStatus === 'saved-local'
+      ? 'Saved on this device'
+      : 'Practice on this device'
   const replayChallenge = selectReplayChallengeStatus(state)
   const sceneState = useMemo(() => buildFactorySceneState(state), [state])
+  const [soundEnabled, setSoundEnabled] = useState(state.settings.soundEnabled)
   const onStationSelect = useCallback(
     (stationId: StationId) => dispatch({ type: 'SELECT_STATION', stationId }),
     [dispatch],
@@ -35,12 +40,12 @@ export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
       <div className={`factory-hud ${state.taskDockOpen ? 'task-open' : ''}`} aria-label="Factory status">
         <section className="hud-cluster top-left">
           <div className="hud-chip objective-chip">
-            <Anchor aria-hidden="true" size={20} />
+            <Dna aria-hidden="true" size={20} />
             <div>
               <span>
                 Round {state.currentRoundIndex + 1}/{rounds.length}
               </span>
-              <strong>{activeStation.title}</strong>
+              <strong>{sceneState.activeStationLabel}</strong>
             </div>
           </div>
           <div className="round-pips" aria-label="Round progress">
@@ -55,6 +60,16 @@ export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
         </section>
 
         <section className="hud-cluster top-right">
+          <button
+            aria-label={soundEnabled ? 'Mute sound' : 'Turn on sound'}
+            aria-pressed={soundEnabled}
+            className="icon-button sound-toggle"
+            onClick={() => setSoundEnabled((current) => !current)}
+            title={soundEnabled ? 'Mute sound' : 'Turn on sound'}
+            type="button"
+          >
+            {soundEnabled ? <Volume2 aria-hidden="true" size={20} /> : <VolumeX aria-hidden="true" size={20} />}
+          </button>
           <div className="hud-chip run-status-chip">
             <span>Run status</span>
             <strong>
@@ -71,35 +86,20 @@ export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
         </section>
 
         {!state.taskDockOpen && (
-          <>
-            <section className="station-strip" aria-label="Factory stations">
-              {stationDefinitions.map((station) => (
-                <button
-                  className={station.id === activeStationId ? 'station-button active' : 'station-button inactive'}
-                  data-station-id={station.id}
-                  key={station.id}
-                  onClick={() => dispatch({ type: 'SELECT_STATION', stationId: station.id })}
-                  type="button"
-                >
-                  <span>{station.shortTitle}</span>
-                  <strong>{station.title}</strong>
-                  {station.id === activeStationId && <small>Current</small>}
-                </button>
-              ))}
-            </section>
-
-            <section className="interaction-prompt">
-              <strong>{state.feedback?.title ?? activeStation.title}</strong>
-              <span>{state.feedback?.message ?? currentRound.prompt}</span>
-              <button
-                className="primary-action compact"
-                onClick={() => dispatch({ type: 'OPEN_ACTIVE_STATION' })}
-                type="button"
-              >
-                Start {activeStation.shortTitle}
-              </button>
-            </section>
-          </>
+          <section className="interaction-prompt">
+            <div>
+              <small>Current lab action</small>
+              <strong>{sceneState.activeStationLabel}</strong>
+              <span>{currentRound.prompt}</span>
+            </div>
+            <button
+              className="primary-action compact"
+              onClick={() => dispatch({ type: 'OPEN_ACTIVE_STATION' })}
+              type="button"
+            >
+              Start {activeStation.shortTitle}
+            </button>
+          </section>
         )}
       </div>
 
@@ -132,6 +132,19 @@ export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
         isOpen={state.isCodonWheelOpen}
         onClose={() => dispatch({ type: 'CLOSE_CODON_WHEEL' })}
       />
+
+      {state.screen === 'success' && state.feedback && (
+        <section className="shipment-overlay" role="status" data-testid="shipment-overlay">
+          <div>
+            <small>Production update</small>
+            <strong>{state.feedback.title}</strong>
+            <span>{state.feedback.message}</span>
+          </div>
+          <button className="primary-action compact" onClick={() => dispatch({ type: 'CONTINUE_AFTER_SUCCESS', now: Date.now() })} type="button">
+            {state.currentRoundIndex === rounds.length - 1 ? 'Finish order' : 'Continue production'}
+          </button>
+        </section>
+      )}
     </main>
   )
 }

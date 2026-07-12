@@ -1,8 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,650;9..144,800&family=Nunito:wght@500;700;800;900&display=swap');
+/* Protein Factory uses system fonts so classroom devices never wait on a remote font request. */
 
 :root {
   color-scheme: light;
-  font-family: 'Nunito', 'Trebuchet MS', sans-serif;
+  font-family: Inter, ui-rounded, 'Segoe UI', Arial, sans-serif;
   font-synthesis: none;
   line-height: 1.5;
   text-rendering: optimizeLegibility;
@@ -86,7 +86,7 @@ p {
 h1,
 h2,
 h3 {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
   line-height: 1.04;
   letter-spacing: 0;
 }
@@ -131,8 +131,7 @@ h3 {
   padding: 34px;
   overflow: hidden;
   background:
-    linear-gradient(145deg, rgba(20, 34, 54, 0.8), rgba(15, 100, 116, 0.82)),
-    url('/pirate-lab.svg') right 34px bottom 18px / min(420px, 76%) no-repeat;
+    #28556a;
   color: #fffaf0;
 }
 
@@ -169,7 +168,7 @@ h3 {
 .start-hero h1 {
   max-width: 680px;
   margin-top: 8px;
-  font-size: clamp(3rem, 8vw, 6rem);
+  font-size: 4.5rem;
 }
 
 .start-copy {
@@ -775,14 +774,14 @@ input[type='checkbox'] {
   display: grid;
   gap: 2px;
   color: var(--sea-dark);
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
   font-size: 1.3rem;
   font-weight: 800;
 }
 
 .codon-row small {
   color: var(--ink-soft);
-  font-family: 'Nunito', 'Trebuchet MS', sans-serif;
+  font-family: Inter, ui-rounded, 'Segoe UI', Arial, sans-serif;
   font-size: 0.72rem;
   font-weight: 900;
   text-transform: uppercase;
@@ -805,10 +804,24 @@ input[type='checkbox'] {
 }
 
 .end-screen {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
   align-items: center;
   gap: 22px;
+}
+
+.end-screen .factory-canvas-host {
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.28;
+}
+
+.end-screen .score-panel,
+.end-screen .review-panel {
+  position: relative;
+  z-index: 1;
+  background: rgba(255, 250, 240, 0.97);
 }
 
 .score-panel,
@@ -818,7 +831,7 @@ input[type='checkbox'] {
 
 .score-panel h1 {
   margin-top: 10px;
-  font-size: clamp(2.4rem, 8vw, 5rem);
+  font-size: 3.8rem;
 }
 
 .run-rating {
@@ -944,6 +957,7 @@ input[type='checkbox'] {
 }
 
 .factory-canvas-host {
+  background: #dcebed;
   position: absolute;
   inset: 0;
 }
@@ -1038,7 +1052,6 @@ input[type='checkbox'] {
   gap: 10px;
   min-height: 52px;
   padding: 10px 12px;
-  backdrop-filter: blur(10px);
   font-weight: 900;
 }
 
@@ -1150,7 +1163,6 @@ input[type='checkbox'] {
   min-height: 60px;
   padding: 12px;
   transform: translateX(-50%);
-  backdrop-filter: blur(10px);
   font-weight: 900;
 }
 
@@ -1739,7 +1751,7 @@ input[type='checkbox'] {
   }
 
   .start-hero h1 {
-    font-size: clamp(2.5rem, 10vw, 4.5rem);
+    font-size: 3.4rem;
   }
 
   .start-copy {
@@ -1758,6 +1770,160 @@ input[type='checkbox'] {
   .task-dock-header h2 {
     font-size: 1.7rem;
   }
+}
+
+.teacher-settings {
+  display: grid;
+  gap: 10px;
+}
+
+.teacher-settings[open] {
+  padding-bottom: 12px;
+}
+
+.shipment-overlay {
+  position: fixed;
+  z-index: 25;
+  left: 50%;
+  bottom: 24px;
+  width: min(680px, calc(100% - 32px));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px;
+  border: 2px solid rgba(23, 111, 98, 0.32);
+  border-radius: var(--radius);
+  background: #f7fffc;
+  box-shadow: 0 14px 36px rgba(14, 48, 58, 0.22);
+}
+
+.shipment-overlay div {
+  display: grid;
+  gap: 3px;
+}
+
+.shipment-overlay small {
+  color: var(--ink-soft);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.shipment-overlay strong {
+  font-size: 1.12rem;
+}
+
+.shipment-overlay span {
+  color: var(--ink-soft);
+  font-weight: 750;
+}
+
+.transfer-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #dcebed;
+}
+
+.transfer-panel {
+  width: min(720px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid rgba(23, 58, 70, 0.16);
+  border-radius: var(--radius);
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(14, 48, 58, 0.18);
+}
+
+.transfer-panel h1,
+.transfer-panel p {
+  margin: 0;
+}
+
+.transfer-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.protein-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.protein-comparison > div {
+  display: grid;
+  gap: 5px;
+  min-height: 96px;
+  padding: 12px;
+  border: 2px solid rgba(23, 58, 70, 0.14);
+  border-radius: var(--radius);
+  background: #f4f8f7;
+}
+
+.protein-comparison .variant {
+  background: #fff4f2;
+}
+
+.fold-model {
+  width: 30px;
+  height: 30px;
+  border: 7px solid #16856f;
+  border-radius: 50%;
+}
+
+.variant .fold-model {
+  border-color: #b94d58;
+  border-radius: 35% 65% 45% 55%;
+}
+
+.inline-codon-chart {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(23, 58, 70, 0.16);
+  border-radius: var(--radius);
+  background: #eef6f5;
+}
+
+.inline-codon-chart > span {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.inline-codon-chart > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.inline-codon-chart p {
+  display: grid;
+  margin: 0;
+  padding: 6px;
+  border-radius: 4px;
+  background: #ffffff;
+  text-align: center;
+}
+
+.inline-codon-chart p.active {
+  outline: 3px solid #f3bd3f;
+}
+
+@media (max-width: 640px) {
+  .start-hero h1 { font-size: 2.7rem; }
+  .shipment-overlay { align-items: stretch; flex-direction: column; bottom: 12px; }
+  .transfer-screen { padding: 12px; }
+  .transfer-panel { padding: 18px; }
+  .transfer-options,
+  .protein-comparison { grid-template-columns: 1fr; }
+  .inline-codon-chart > div { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {

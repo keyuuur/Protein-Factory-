@@ -1,5 +1,5 @@
 {
-  "name": "pirate-protein-factory-web",
+  "name": "protein-factory-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -23,11 +23,13 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@types/node": "^24.13.2",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.185.0",
     "@vitejs/plugin-react": "^6.0.3",
     "oxlint": "^1.71.0",
+    "pngjs": "^7.0.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vitest": "^4.1.10"

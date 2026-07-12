@@ -1,8 +1,8 @@
-# Pirate Protein Factory Web
+# Protein Factory Web
 
-This folder is the Vercel-ready rebuild of Pirate Protein Factory.
+This folder is the Vercel-ready Protein Factory classroom game.
 
-The legacy Apps Script version remains in the repository root. This web app is a separate Vite + React + TypeScript implementation that keeps the original 8-round biology content while improving the game loop, feedback, and classroom UI.
+The legacy Apps Script interface remains in the repository root. The active app is a Vite + React + TypeScript + Three.js implementation with eight connected production stages across a normal pigment-enzyme order and a linked one-base variant.
 
 ## Active Source Map
 
@@ -12,7 +12,7 @@ The legacy Apps Script version remains in the repository root. This web app is a
 - Active Three.js runtime: `src/render/*`
 - Archived reference code: `legacy-src/*`
 
-Do not edit the root Apps Script files or `legacy-src/*` for the web app unless a task explicitly brings those files back into scope.
+The root Apps Script files now also contain the versioned V3 teacher-submission endpoint. Keep legacy `saveAttempt` behavior intact when changing that backend.
 
 ## Local Commands
 
@@ -25,7 +25,7 @@ npm run test
 npm run test:e2e
 ```
 
-`npm run test:e2e` runs the desktop and iPad-sized browser flows and writes review screenshots to `../output/playwright/*level2*.png`.
+`npm run test:e2e` runs desktop, iPad Chromium, iPad WebKit portrait/landscape, and phone flows. Review screenshots are written to `../output/playwright/*-v3-*.png` and are intentionally ignored by Git.
 
 ## Vercel Setup
 
@@ -36,16 +36,26 @@ Use Git integration and set the Vercel project root directory to `web`.
 - Output directory: `dist`
 - Install command: `npm install`
 - Node: use a current Node version compatible with `package.json` engines
+- Server environment: set `APPS_SCRIPT_WEB_APP_URL` and `RESULTS_WRITE_TOKEN` from `.env.example`
 
-Score saving is intentionally local/fake for this phase. Apps Script and Google Sheets submission are deferred until the game loop and UI are stable.
+The browser posts final attempts to `/api/attempt`. The Vercel function validates the request and forwards it to Apps Script without exposing the write token to students.
 
 ## Classroom Accountability Status
 
-The web app currently writes final results to browser storage and keeps a local history on the device. It does not submit to Google Sheets yet. Before enabling real teacher submission, map the web payload through `src/results/appsScriptMapper.ts` and test it against the legacy `saveAttempt` payload shape in the root Apps Script files.
+The app saves versioned checkpoints and up to 30 local results, queues failed submissions, and retries when the device reconnects. Apps Script stores V3 attempts in `ProteinFactoryV3` and deduplicates by `attemptId` while preserving the legacy tabs.
+
+Before enabling student traffic:
+
+1. Set the same long random `RESULTS_WRITE_TOKEN` in Apps Script Script Properties and Vercel.
+2. Deploy the updated Apps Script web app and set its `/exec` URL in Vercel.
+3. Use demo records in a Vercel preview deployment.
+4. Confirm rows appear once in `ProteinFactoryV3`, including after a deliberate retry.
+5. Complete the physical-iPad check, then promote the preview deployment.
 
 ## Pre-Handoff Checklist
 
 1. Run `npm run test`, `npm run lint`, `npm run build`, and relevant Playwright tests from this folder.
 2. Review generated screenshots in `../output/playwright/`.
 3. Keep generated artifacts uncommitted unless a task explicitly asks for screenshots.
-4. Stage the intended `web/` app files before pushing; the repo root contains legacy Apps Script code.
+4. Confirm `clasp status` lists only Apps Script source files before pushing.
+5. Keep `.env` files and generated artifacts uncommitted.

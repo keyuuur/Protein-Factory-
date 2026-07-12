@@ -3,15 +3,21 @@ import { useState } from 'react'
 import { buildTeacherSummary, formatMissedSkill } from '../results/gameResults'
 import type { LocalSaveResult } from '../results/localResultSaver'
 import type { FinalGamePayload } from '../types'
+import type { SubmissionStatus } from '../results/submissionQueue'
+import { buildFinalSceneState } from '../render/adapters/sceneState'
+import { FactoryCanvas } from './FactoryCanvas'
+
+const ignoreStationSelection = () => undefined
 
 interface EndScreenProps {
   payload: FinalGamePayload
   saveResult: LocalSaveResult | null
   onReplay: () => void
   onRestart: () => void
+  submissionStatus: SubmissionStatus
 }
 
-export function EndScreen({ payload, saveResult, onReplay, onRestart }: EndScreenProps) {
+export function EndScreen({ payload, saveResult, onReplay, onRestart, submissionStatus }: EndScreenProps) {
   const [showDetails, setShowDetails] = useState(false)
   const [copyStatus, setCopyStatus] = useState('')
 
@@ -26,14 +32,15 @@ export function EndScreen({ payload, saveResult, onReplay, onRestart }: EndScree
   }
 
   return (
-    <main className="end-screen" data-testid="end-screen">
+    <main className="end-screen end-lab" data-testid="end-screen">
+      <FactoryCanvas sceneState={buildFinalSceneState()} onStationSelect={ignoreStationSelection} />
       <section className="score-panel">
         <Trophy aria-hidden="true" className="trophy-mark" size={72} />
         <p className="eyebrow">Factory run {payload.completionStatus}</p>
         <h1>
-          {payload.score}/{payload.maxScore} stations completed
+          {payload.independentStages}/{payload.maxScore} stages independent
         </h1>
-        <p className="run-rating">{payload.factoryRating}</p>
+        <p className="run-rating">{payload.factoryRating} Production</p>
         {payload.activeReplayChallenge && (
           <p className={`challenge-result ${payload.replayChallengeMet ? 'met' : 'missed'}`}>
             {payload.replayChallengeMet ? 'Replay challenge met' : 'Replay challenge still open'}
@@ -51,10 +58,7 @@ export function EndScreen({ payload, saveResult, onReplay, onRestart }: EndScree
             <dt>Period</dt>
             <dd>{showDetails ? payload.classPeriod : 'Hidden'}</dd>
           </div>
-          <div>
-            <dt>Completion</dt>
-            <dd>{payload.percent}%</dd>
-          </div>
+          <div><dt>Completed</dt><dd>{payload.score}/{payload.maxScore}</dd></div>
           <div>
             <dt>Clean clears</dt>
             <dd>{payload.cleanRounds}</dd>
@@ -81,7 +85,7 @@ export function EndScreen({ payload, saveResult, onReplay, onRestart }: EndScree
       <section className="review-panel">
         <h2>Replay goal</h2>
         <p className="replay-goal">{payload.replayGoal}</p>
-        {payload.reviewSummary.length > 0 && (
+        {showDetails && payload.reviewSummary.length > 0 && (
           <div className="teacher-glance">
             <strong>Teacher glance</strong>
             <ul>
@@ -91,14 +95,11 @@ export function EndScreen({ payload, saveResult, onReplay, onRestart }: EndScree
             </ul>
           </div>
         )}
-        <p>
-          Public-safe view is on. Student details and mistake notes are hidden until details are opened.
-        </p>
         <p className={saveResult?.ok === false ? 'save-status failed' : 'save-status'}>
-          {saveResult?.ok === false ? `Local save failed: ${saveResult.error}` : 'Saved as local practice on this device.'}
+          {saveResult?.ok === false ? `Local save failed: ${saveResult.error}` : submissionLabel(submissionStatus)}
         </p>
         <button className="secondary-action compact details-toggle" onClick={() => setShowDetails((current) => !current)} type="button">
-          {showDetails ? 'Hide details' : 'Show details'}
+          {showDetails ? 'Hide teacher details' : 'Show details'}
         </button>
         <button className="secondary-action compact details-toggle" onClick={handleCopySummary} type="button">
           Copy teacher summary
@@ -120,8 +121,8 @@ export function EndScreen({ payload, saveResult, onReplay, onRestart }: EndScree
               <dd>{payload.isDemo ? 'Demo / projector' : 'Student run'}</dd>
             </div>
             <div>
-              <dt>Saved</dt>
-              <dd>On this device only</dd>
+              <dt>Submission</dt>
+              <dd>{submissionLabel(submissionStatus)}</dd>
             </div>
           </dl>
         )}
@@ -138,4 +139,12 @@ export function EndScreen({ payload, saveResult, onReplay, onRestart }: EndScree
       </section>
     </main>
   )
+}
+
+function submissionLabel(status: SubmissionStatus): string {
+  if (status === 'submitted') return 'Submitted to your teacher.'
+  if (status === 'saving') return 'Saving and submitting...'
+  if (status === 'waiting-for-connection') return 'Saved on this device. Waiting for connection.'
+  if (status === 'failed') return 'Saved on this device. Submission needs another try.'
+  return 'Saved on this device. Submission queued.'
 }

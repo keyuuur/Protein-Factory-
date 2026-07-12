@@ -1,348 +1,490 @@
 import * as THREE from 'three'
-import type { FactorySceneState, StationId } from '../types'
+import type { StationId } from '../types'
+import type { FactorySceneSnapshot, ProteinComparison } from './adapters/sceneState'
 
 interface FactoryRuntimeOptions {
   container: HTMLElement
+  onContextLost?: () => void
+  onContextRestored?: () => void
   onStationSelect: (stationId: StationId) => void
 }
 
 interface StationRecord {
   stationId: StationId
-  mesh: THREE.Mesh
+  body: THREE.Mesh
   hitbox: THREE.Mesh
-  halo: THREE.Mesh
-  marker: THREE.Mesh
+  indicator: THREE.Mesh
   baseColor: THREE.Color
+  baseY: number
 }
 
 const stationPositions: Record<StationId, THREE.Vector3> = {
-  'dna-dock': new THREE.Vector3(-4.6, 0, -2.7),
-  'transcription-press': new THREE.Vector3(4.6, 0, -2.7),
-  'ribosome-galley': new THREE.Vector3(-4.5, 0, 2.8),
-  'trait-vault': new THREE.Vector3(4.5, 0, 2.8),
+  'dna-dock': new THREE.Vector3(-4.5, 0, -2.7),
+  'transcription-press': new THREE.Vector3(4.5, 0, -2.7),
+  'ribosome-galley': new THREE.Vector3(-4.5, 0, 2.45),
+  'trait-vault': new THREE.Vector3(4.5, 0, 2.45),
 }
 
-const movementKeys = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'])
+const stationColors: Record<StationId, number> = {
+  'dna-dock': 0x2878b8,
+  'transcription-press': 0xd68422,
+  'ribosome-galley': 0x16856f,
+  'trait-vault': 0xb94d58,
+}
+
+const baseColors: Record<string, number> = {
+  A: 0xe8a82e,
+  T: 0x2878b8,
+  U: 0x8b5fbf,
+  C: 0x1b9a78,
+  G: 0xd85754,
+}
 
 export class FactoryRuntime {
   private readonly container: HTMLElement
+  private readonly onContextLost?: () => void
+  private readonly onContextRestored?: () => void
   private readonly onStationSelect: (stationId: StationId) => void
   private readonly renderer: THREE.WebGLRenderer
   private readonly scene = new THREE.Scene()
-  private readonly camera = new THREE.PerspectiveCamera(48, 1, 0.1, 100)
-  private readonly clock = new THREE.Clock()
+  private readonly camera = new THREE.PerspectiveCamera(43, 1, 0.1, 100)
+  private readonly timer = new THREE.Timer()
   private readonly raycaster = new THREE.Raycaster()
   private readonly pointer = new THREE.Vector2()
-  private readonly keys = new Set<string>()
   private readonly stationRecords: StationRecord[] = []
-  private readonly player: THREE.Mesh
+  private readonly cargoGroup = new THREE.Group()
   private readonly resizeObserver: ResizeObserver
-  private cargoCrate: THREE.Mesh | null = null
+  private readonly reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   private animationFrame = 0
-  private sceneState: FactorySceneState | null = null
+  private lastFrameAt = 0
+  private sceneState: FactorySceneSnapshot | null = null
   private disposed = false
+  private contextAvailable = true
 
-  constructor({ container, onStationSelect }: FactoryRuntimeOptions) {
+  constructor({
+    container,
+    onContextLost,
+    onContextRestored,
+    onStationSelect,
+  }: FactoryRuntimeOptions) {
     this.container = container
+    this.onContextLost = onContextLost
+    this.onContextRestored = onContextRestored
     this.onStationSelect = onStationSelect
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    this.renderer.setClearColor(0x9bd8e8, 1)
+    this.renderer = new THREE.WebGLRenderer({
+      alpha: true,
+      antialias: true,
+      powerPreference: 'low-power',
+      premultipliedAlpha: false,
+    })
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
+    this.renderer.setClearColor(0xdcebed, 0)
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.domElement.className = 'factory-canvas'
+    this.renderer.domElement.setAttribute('aria-label', 'Interactive 3D cell laboratory')
     this.container.appendChild(this.renderer.domElement)
 
-    this.camera.position.set(0, 9.2, 9.8)
-    this.camera.lookAt(0, 0, 0)
+    this.camera.position.set(0, 8.7, 10.8)
+    this.camera.lookAt(0, 0.45, 0)
+    this.createLab()
+    this.scene.add(this.cargoGroup)
 
-    this.player = this.createPlayer()
-    this.scene.add(this.player)
-    this.createScene()
+    this.timer.connect(document)
     this.resizeObserver = new ResizeObserver(() => this.resize())
     this.resizeObserver.observe(this.container)
-
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown)
     this.renderer.domElement.addEventListener('webglcontextlost', this.handleContextLost)
     this.renderer.domElement.addEventListener('webglcontextrestored', this.handleContextRestored)
-    window.addEventListener('keydown', this.handleKeyDown)
-    window.addEventListener('keyup', this.handleKeyUp)
     document.addEventListener('visibilitychange', this.handleVisibility)
     this.resize()
-    this.loop()
+    this.startLoop()
   }
 
-  setState(sceneState: FactorySceneState): void {
+  setState(sceneState: FactorySceneSnapshot): void {
     this.sceneState = sceneState
     const completed = new Set(sceneState.completedStationIds)
 
     this.stationRecords.forEach((record) => {
-      const material = record.mesh.material
-      if (!(material instanceof THREE.MeshStandardMaterial)) {
-        return
-      }
+      const material = record.body.material
+      if (!(material instanceof THREE.MeshStandardMaterial)) return
 
-      const isSelected = record.stationId === sceneState.selectedStationId
       const isActive = record.stationId === sceneState.activeStationId
+      const isSelected = record.stationId === sceneState.selectedStationId
       const isComplete = completed.has(record.stationId)
-      record.halo.visible = isSelected || isActive
-      record.marker.visible = isComplete
+      record.indicator.visible = isActive || isComplete
+      record.indicator.material = new THREE.MeshBasicMaterial({
+        color: isActive ? (sceneState.repairActive ? 0xd85754 : 0xf3bd3f) : 0x4bc394,
+      })
 
-      if (isSelected) {
-        material.color.set(0xf4b23f)
-        record.mesh.scale.setScalar(1.08)
-      } else if (isActive) {
-        material.color.set(sceneState.repairActive ? 0xe45d4d : 0x19a58c)
-        record.mesh.scale.setScalar(sceneState.repairActive ? 1.1 : 1.04)
-      } else if (isComplete) {
-        material.color.set(0x1f6fb2)
-        record.mesh.scale.setScalar(1)
-      } else {
-        material.color.copy(record.baseColor)
-        record.mesh.scale.setScalar(1)
-      }
+      material.color.copy(record.baseColor)
+      material.emissive.set(isActive ? record.baseColor : new THREE.Color(0x000000))
+      material.emissiveIntensity = isActive ? (isSelected ? 0.34 : 0.18) : 0
+      record.body.scale.setScalar(isActive ? 1.06 : 1)
     })
-    this.updateCargoCue(sceneState)
+
+    this.buildCargo(sceneState)
+    this.renderNow()
   }
 
   dispose(): void {
-    if (this.disposed) {
-      return
-    }
-
+    if (this.disposed) return
     this.disposed = true
     cancelAnimationFrame(this.animationFrame)
+    this.timer.dispose()
     this.resizeObserver.disconnect()
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown)
     this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost)
     this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored)
-    window.removeEventListener('keydown', this.handleKeyDown)
-    window.removeEventListener('keyup', this.handleKeyUp)
     document.removeEventListener('visibilitychange', this.handleVisibility)
-    this.scene.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        object.geometry.dispose()
-        disposeMaterial(object.material)
-      }
-    })
+    this.scene.traverse(disposeObject)
     this.renderer.dispose()
     this.renderer.domElement.remove()
   }
 
-  private createScene(): void {
-    this.scene.background = new THREE.Color(0x9bd8e8)
-    this.scene.fog = new THREE.Fog(0x9bd8e8, 22, 40)
+  private createLab(): void {
+    this.scene.background = null
+    this.scene.fog = new THREE.Fog(0xdcebed, 19, 34)
 
-    const ambient = new THREE.HemisphereLight(0xeaf7ff, 0x4c755e, 2.2)
+    const ambient = new THREE.HemisphereLight(0xf8ffff, 0x58736e, 2.45)
     this.scene.add(ambient)
+    const keyLight = new THREE.DirectionalLight(0xffffff, 3.1)
+    keyLight.position.set(-4, 9, 6)
+    this.scene.add(keyLight)
+    const fillLight = new THREE.DirectionalLight(0xcdefff, 1.4)
+    fillLight.position.set(8, 5, -4)
+    this.scene.add(fillLight)
 
-    const sun = new THREE.DirectionalLight(0xffffff, 2.8)
-    sun.position.set(-5, 8, 6)
-    this.scene.add(sun)
-
-    const deck = new THREE.Mesh(
-      new THREE.BoxGeometry(12.5, 0.4, 8.2),
-      new THREE.MeshStandardMaterial({ color: 0x8d633d, roughness: 0.78 }),
+    const floor = new THREE.Mesh(
+      new THREE.BoxGeometry(13.6, 0.32, 8.5),
+      new THREE.MeshStandardMaterial({ color: 0xeff6f5, roughness: 0.82 }),
     )
-    deck.position.y = -0.25
-    this.scene.add(deck)
+    floor.position.y = -0.34
+    this.scene.add(floor)
 
-    const centerBelt = new THREE.Mesh(
-      new THREE.BoxGeometry(9.5, 0.12, 0.68),
-      new THREE.MeshStandardMaterial({ color: 0x24485b, metalness: 0.15, roughness: 0.45 }),
+    const backWall = new THREE.Mesh(
+      new THREE.BoxGeometry(13.6, 3.4, 0.24),
+      new THREE.MeshStandardMaterial({ color: 0xbfd6d8, roughness: 0.9 }),
     )
-    centerBelt.position.y = 0.08
-    this.scene.add(centerBelt)
+    backWall.position.set(0, 1.35, -4.1)
+    this.scene.add(backWall)
 
-    const crossBelt = centerBelt.clone()
-    crossBelt.rotation.y = Math.PI / 2
-    this.scene.add(crossBelt)
-
-    this.cargoCrate = new THREE.Mesh(
-      new THREE.BoxGeometry(0.72, 0.34, 0.52),
-      new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0x000000, roughness: 0.46 }),
+    const centerBench = new THREE.Mesh(
+      new THREE.BoxGeometry(5.3, 0.38, 3.4),
+      new THREE.MeshStandardMaterial({ color: 0x425f69, metalness: 0.18, roughness: 0.48 }),
     )
-    this.cargoCrate.position.set(0, 0.36, 0)
-    this.scene.add(this.cargoCrate)
+    centerBench.position.set(0, 0.02, 0)
+    this.scene.add(centerBench)
 
-    this.addStation('dna-dock', 0x3da9fc, 'helix')
-    this.addStation('transcription-press', 0xf4b23f, 'press')
-    this.addStation('ribosome-galley', 0x19a58c, 'ribosome')
-    this.addStation('trait-vault', 0xe45d4d, 'vault')
+    this.addStation('dna-dock', 'DNA ASSEMBLY', 'helix')
+    this.addStation('transcription-press', 'RNA PRESS', 'press')
+    this.addStation('ribosome-galley', 'RIBOSOME LINE', 'ribosome')
+    this.addStation('trait-vault', 'FUNCTION TEST', 'chamber')
 
-    const ocean = new THREE.Mesh(
-      new THREE.CircleGeometry(26, 48),
-      new THREE.MeshBasicMaterial({ color: 0x2b8aa1, transparent: true, opacity: 0.42 }),
-    )
-    ocean.rotation.x = -Math.PI / 2
-    ocean.position.y = -0.55
-    this.scene.add(ocean)
+    const roomLabel = createTextPanel('PROTEIN FACTORY  //  CELL LAB 07', 5.1, 0.42, {
+      background: '#173a46',
+      foreground: '#f5fbfa',
+      fontSize: 42,
+    })
+    roomLabel.position.set(0, 2.45, -3.92)
+    this.scene.add(roomLabel)
   }
 
-  private addStation(stationId: StationId, color: number, shape: 'helix' | 'press' | 'ribosome' | 'vault'): void {
+  private addStation(
+    stationId: StationId,
+    label: string,
+    shape: 'helix' | 'press' | 'ribosome' | 'chamber',
+  ): void {
     const position = stationPositions[stationId]
+    const color = stationColors[stationId]
     const baseColor = new THREE.Color(color)
     const group = new THREE.Group()
     group.position.copy(position)
 
     const platform = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.05, 1.2, 0.34, 8),
-      new THREE.MeshStandardMaterial({ color: 0xefe5c8, roughness: 0.62 }),
+      new THREE.CylinderGeometry(1.02, 1.13, 0.28, 12),
+      new THREE.MeshStandardMaterial({ color: 0xd9e5e2, metalness: 0.12, roughness: 0.55 }),
     )
-    platform.position.y = 0.08
+    platform.position.y = 0.02
     group.add(platform)
 
-    const bodyMaterial = new THREE.MeshStandardMaterial({ color, metalness: 0.1, roughness: 0.45 })
-    const body = this.createStationBody(shape, bodyMaterial)
+    const material = new THREE.MeshStandardMaterial({ color, metalness: 0.22, roughness: 0.38 })
+    const body = this.createStationBody(shape, material)
     body.position.y = 0.72
     group.add(body)
 
-    const beacon = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 18, 12),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: color, emissiveIntensity: 0.45 }),
+    const indicator = new THREE.Mesh(
+      new THREE.TorusGeometry(1.16, 0.055, 8, 36),
+      new THREE.MeshBasicMaterial({ color: 0xf3bd3f }),
     )
-    beacon.position.y = 1.72
-    group.add(beacon)
+    indicator.rotation.x = Math.PI / 2
+    indicator.position.y = 0.21
+    indicator.visible = false
+    group.add(indicator)
 
-    const halo = new THREE.Mesh(
-      new THREE.TorusGeometry(1.26, 0.035, 10, 48),
-      new THREE.MeshBasicMaterial({ color: 0xffd98f, transparent: true, opacity: 0.85 }),
-    )
-    halo.rotation.x = Math.PI / 2
-    halo.position.y = 0.3
-    halo.visible = false
-    group.add(halo)
-
-    const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(0.16, 16, 10),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x19a58c, emissiveIntensity: 1.4 }),
-    )
-    marker.position.set(0.82, 1.44, 0.82)
-    marker.visible = false
-    group.add(marker)
+    const labelPanel = createTextPanel(label, 1.86, 0.32, {
+      background: '#f8fbfa',
+      foreground: '#193d48',
+      fontSize: 34,
+    })
+    labelPanel.position.set(0, 1.62, 0)
+    group.add(labelPanel)
 
     const hitbox = new THREE.Mesh(
-      new THREE.BoxGeometry(2.6, 2.2, 2.6),
-      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }),
+      new THREE.BoxGeometry(2.5, 2.2, 2.4),
+      new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }),
     )
     hitbox.position.copy(position)
-    hitbox.position.y = 0.95
+    hitbox.position.y = 0.92
     hitbox.userData.stationId = stationId
     this.scene.add(hitbox)
 
     this.scene.add(group)
-    this.stationRecords.push({
-      stationId,
-      mesh: body,
-      hitbox,
-      halo,
-      marker,
-      baseColor,
+    this.stationRecords.push({ stationId, body, hitbox, indicator, baseColor, baseY: body.position.y })
+  }
+
+  private createStationBody(
+    shape: 'helix' | 'press' | 'ribosome' | 'chamber',
+    material: THREE.MeshStandardMaterial,
+  ): THREE.Mesh {
+    switch (shape) {
+      case 'helix':
+        return new THREE.Mesh(new THREE.TorusKnotGeometry(0.43, 0.105, 68, 8), material)
+      case 'press':
+        return new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.92, 0.72), material)
+      case 'ribosome':
+        return new THREE.Mesh(new THREE.TorusGeometry(0.54, 0.19, 16, 30), material)
+      case 'chamber':
+        return new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.62, 1.02, 14), material)
+    }
+  }
+
+  private buildCargo(state: FactorySceneSnapshot): void {
+    clearGroup(this.cargoGroup)
+
+    switch (state.cargoKind) {
+      case 'dna':
+        this.buildDnaCargo(state.templateSequence, state.productSequence)
+        break
+      case 'mrna':
+        this.buildRnaCargo(state.templateSequence, state.productSequence)
+        break
+      case 'amino-acids':
+        this.buildAminoCargo(state.codons, state.aminoAcids)
+        break
+      case 'protein-test':
+        this.buildProteinCargo(state.aminoAcids, state.proteinComparison)
+        break
+    }
+
+    const stateLabel = createTextPanel(
+      state.repairActive ? 'CHECK THE HIGHLIGHTED CARGO' : state.stageComplete ? 'STAGE COMPLETE' : state.activeStationLabel,
+      3.6,
+      0.4,
+      {
+        background: state.repairActive ? '#8f313c' : state.stageComplete ? '#176f62' : '#173a46',
+        foreground: '#ffffff',
+        fontSize: 34,
+      },
+    )
+    stateLabel.position.set(0, 1.72, 0)
+    this.cargoGroup.add(stateLabel)
+  }
+
+  private buildDnaCargo(template: string, product: string): void {
+    const maxLength = Math.max(template.length, product.length, 1)
+    const spacing = Math.min(0.68, 3.4 / maxLength)
+    const startX = -((maxLength - 1) * spacing) / 2
+
+    for (let index = 0; index < maxLength; index += 1) {
+      const templateBase = template[index] ?? '-'
+      const productBase = product[index] ?? '-'
+      const x = startX + index * spacing
+      this.addBaseToken(templateBase, x, 0.82, -0.38)
+      this.addBaseToken(productBase, x, 0.82, 0.38, productBase === '-')
+
+      const rung = new THREE.Mesh(
+        new THREE.BoxGeometry(0.07, 0.07, 0.46),
+        new THREE.MeshStandardMaterial({ color: productBase === '-' ? 0x7f9699 : 0xe3ecea, roughness: 0.6 }),
+      )
+      rung.position.set(x, 0.82, 0)
+      this.cargoGroup.add(rung)
+    }
+
+    const label = createTextPanel(`DNA  ${template}  /  ${product || '----'}`, 3.7, 0.4, {
+      background: '#eef6f5',
+      foreground: '#173a46',
+      fontSize: 38,
+    })
+    label.position.set(0, 0.24, 0)
+    label.rotation.x = -Math.PI / 2
+    this.cargoGroup.add(label)
+  }
+
+  private buildRnaCargo(template: string, product: string): void {
+    const sequence = product.padEnd(template.length, '-')
+    const spacing = Math.min(0.76, 3.6 / Math.max(sequence.length, 1))
+    const startX = -((sequence.length - 1) * spacing) / 2
+
+    sequence.split('').forEach((base, index) => {
+      const token = new THREE.Mesh(
+        new THREE.BoxGeometry(0.55, 0.18, 0.66),
+        new THREE.MeshStandardMaterial({
+          color: base === '-' ? 0x8ba0a2 : baseColors[base] ?? 0x597b83,
+          emissive: base === '-' ? 0x000000 : baseColors[base] ?? 0x000000,
+          emissiveIntensity: 0.08,
+          roughness: 0.5,
+        }),
+      )
+      token.position.set(startX + index * spacing, 0.77, 0)
+      this.cargoGroup.add(token)
+      const baseLabel = createTextPanel(base, 0.38, 0.3, {
+        background: base === '-' ? '#71878b' : '#ffffff',
+        foreground: base === '-' ? '#ffffff' : '#173a46',
+        fontSize: 52,
+      })
+      baseLabel.position.set(startX + index * spacing, 0.9, 0.35)
+      this.cargoGroup.add(baseLabel)
+    })
+
+    const label = createTextPanel(`DNA ${template}  >  mRNA ${product || 'loading'}`, 3.9, 0.4, {
+      background: '#eef6f5',
+      foreground: '#173a46',
+      fontSize: 36,
+    })
+    label.position.set(0, 0.24, 0)
+    label.rotation.x = -Math.PI / 2
+    this.cargoGroup.add(label)
+  }
+
+  private buildAminoCargo(codons: string[], aminoAcids: string[]): void {
+    const count = Math.max(codons.length, 1)
+    const spacing = Math.min(1.32, 3.8 / count)
+    const startX = -((count - 1) * spacing) / 2
+
+    codons.forEach((codon, index) => {
+      const aminoAcid = aminoAcids[index] || 'EMPTY'
+      const loaded = Boolean(aminoAcids[index])
+      const capsule = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.24, 0.42, 5, 12),
+        new THREE.MeshStandardMaterial({
+          color: loaded ? 0x31a98c : 0x879b9e,
+          emissive: loaded ? 0x0b4c40 : 0x000000,
+          emissiveIntensity: 0.16,
+          roughness: 0.42,
+        }),
+      )
+      capsule.rotation.z = Math.PI / 2
+      capsule.position.set(startX + index * spacing, 0.84, 0)
+      this.cargoGroup.add(capsule)
+
+      const label = createTextPanel(`${codon}  ${aminoAcid}`, 1.06, 0.33, {
+        background: loaded ? '#e9f7f2' : '#dfe7e6',
+        foreground: '#173a46',
+        fontSize: 31,
+      })
+      label.position.set(startX + index * spacing, 0.35, 0.2)
+      label.rotation.x = -Math.PI / 2
+      this.cargoGroup.add(label)
     })
   }
 
-  private createStationBody(shape: 'helix' | 'press' | 'ribosome' | 'vault', material: THREE.MeshStandardMaterial): THREE.Mesh {
-    switch (shape) {
-      case 'helix':
-        return new THREE.Mesh(new THREE.TorusKnotGeometry(0.44, 0.12, 72, 8), material)
-      case 'press':
-        return new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9), material)
-      case 'ribosome':
-        return new THREE.Mesh(new THREE.TorusGeometry(0.54, 0.18, 16, 28), material)
-      case 'vault':
-        return new THREE.Mesh(new THREE.CylinderGeometry(0.64, 0.64, 0.9, 6), material)
-    }
+  private buildProteinCargo(aminoAcids: string[], comparison: ProteinComparison | null): void {
+    const normal = this.createProteinAssay(0x2b9c80, false)
+    normal.position.set(-1.08, 0.76, 0)
+    this.cargoGroup.add(normal)
+
+    const variant = this.createProteinAssay(comparison?.pigmentActive ? 0x6c4b93 : 0xd05c65, true)
+    variant.position.set(1.08, 0.76, 0)
+    this.cargoGroup.add(variant)
+
+    const normalLabel = createTextPanel(`NORMAL  ${shortLabel(comparison?.normalLabel || 'protein')}`, 1.75, 0.34, {
+      background: '#e9f7f2',
+      foreground: '#173a46',
+      fontSize: 29,
+    })
+    normalLabel.position.set(-1.08, 0.22, 0.2)
+    normalLabel.rotation.x = -Math.PI / 2
+    this.cargoGroup.add(normalLabel)
+
+    const variantLabel = createTextPanel(`VARIANT  ${shortLabel(comparison?.variantLabel || 'comparison')}`, 1.75, 0.34, {
+      background: '#f8e9eb',
+      foreground: '#173a46',
+      fontSize: 29,
+    })
+    variantLabel.position.set(1.08, 0.22, 0.2)
+    variantLabel.rotation.x = -Math.PI / 2
+    this.cargoGroup.add(variantLabel)
+
+    const result = comparison?.traitLabel || `CHAIN ${aminoAcids.join('-') || 'loading'}`
+    const resultLabel = createTextPanel(shortLabel(result, 36), 3.9, 0.4, {
+      background: comparison?.selectedLabel ? '#173a46' : '#647b80',
+      foreground: '#ffffff',
+      fontSize: 31,
+    })
+    resultLabel.position.set(0, 1.28, 0)
+    this.cargoGroup.add(resultLabel)
   }
 
-  private createPlayer(): THREE.Mesh {
-    const player = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.22, 0.54, 5, 10),
-      new THREE.MeshStandardMaterial({ color: 0x142236, roughness: 0.4 }),
+  private createProteinAssay(color: number, variant: boolean): THREE.Group {
+    const group = new THREE.Group()
+    const vessel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.48, 0.48, 0.76, 18),
+      new THREE.MeshStandardMaterial({ color: 0xe5efed, metalness: 0.12, roughness: 0.36 }),
     )
-    player.position.set(0, 0.46, 0)
-    return player
+    group.add(vessel)
+    const protein = new THREE.Mesh(
+      variant ? new THREE.TorusKnotGeometry(0.24, 0.08, 42, 7) : new THREE.TorusGeometry(0.27, 0.1, 12, 24),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.14, roughness: 0.4 }),
+    )
+    protein.rotation.x = Math.PI / 2
+    group.add(protein)
+    return group
   }
 
-  private loop = (): void => {
-    if (this.disposed) {
-      return
-    }
+  private addBaseToken(base: string, x: number, y: number, z: number, empty = false): void {
+    const token = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 16, 12),
+      new THREE.MeshStandardMaterial({
+        color: empty ? 0x84999c : baseColors[base] ?? 0x6b8388,
+        roughness: 0.4,
+      }),
+    )
+    token.position.set(x, y, z)
+    this.cargoGroup.add(token)
+  }
 
-    const delta = Math.min(this.clock.getDelta(), 0.05)
-    this.updatePlayer(delta)
-    this.animateStations()
-    this.renderer.render(this.scene, this.camera)
+  private startLoop(): void {
+    if (this.disposed || this.reduceMotion || document.hidden || !this.contextAvailable || this.animationFrame) return
     this.animationFrame = requestAnimationFrame(this.loop)
   }
 
-  private updatePlayer(delta: number): void {
-    if (this.sceneState?.inputLocked) {
-      return
+  private loop = (timestamp: number): void => {
+    this.animationFrame = 0
+    if (this.disposed || document.hidden || !this.contextAvailable) return
+
+    if (timestamp - this.lastFrameAt >= 1000 / 30) {
+      this.timer.update(timestamp)
+      this.animateLab(this.timer.getElapsed())
+      this.renderer.render(this.scene, this.camera)
+      this.lastFrameAt = timestamp
     }
-
-    const direction = new THREE.Vector3()
-    if (this.keys.has('w') || this.keys.has('arrowup')) direction.z -= 1
-    if (this.keys.has('s') || this.keys.has('arrowdown')) direction.z += 1
-    if (this.keys.has('a') || this.keys.has('arrowleft')) direction.x -= 1
-    if (this.keys.has('d') || this.keys.has('arrowright')) direction.x += 1
-
-    if (direction.lengthSq() === 0) {
-      return
-    }
-
-    direction.normalize().multiplyScalar(delta * 3.25)
-    this.player.position.add(direction)
-    this.player.position.x = THREE.MathUtils.clamp(this.player.position.x, -5.6, 5.6)
-    this.player.position.z = THREE.MathUtils.clamp(this.player.position.z, -3.5, 3.5)
-    this.player.rotation.y = Math.atan2(direction.x, direction.z)
+    this.startLoop()
   }
 
-  private animateStations(): void {
-    const elapsed = this.clock.elapsedTime
+  private animateLab(elapsed: number): void {
     this.stationRecords.forEach((record, index) => {
       if (record.stationId === this.sceneState?.activeStationId) {
-        const speed = this.sceneState.repairActive ? 5 : 3
-        record.mesh.position.y = 0.72 + Math.sin(elapsed * speed + index) * 0.07
+        record.body.position.y = record.baseY + Math.sin(elapsed * 2.2 + index) * 0.035
       } else {
-        record.mesh.position.y = 0.72
+        record.body.position.y = record.baseY
       }
     })
-
-    if (this.cargoCrate) {
-      const repairLift = this.sceneState?.repairActive ? Math.sin(elapsed * 6) * 0.08 : Math.sin(elapsed * 2.6) * 0.03
-      this.cargoCrate.position.y = 0.36 + repairLift
-      this.cargoCrate.rotation.y += this.sceneState?.repairActive ? 0.018 : 0.006
-    }
+    this.cargoGroup.rotation.y = Math.sin(elapsed * 0.42) * 0.018
   }
 
-  private updateCargoCue(sceneState: FactorySceneState): void {
-    if (!this.cargoCrate) {
-      return
-    }
-
-    const material = this.cargoCrate.material
-    if (!(material instanceof THREE.MeshStandardMaterial)) {
-      return
-    }
-
-    if (sceneState.repairActive || sceneState.statusKind === 'error') {
-      material.color.set(0xe45d4d)
-      material.emissive.set(0x5a120e)
-      material.emissiveIntensity = 0.65
-      this.cargoCrate.scale.setScalar(1.15)
-      return
-    }
-
-    if (sceneState.statusKind === 'success') {
-      material.color.set(0x19a58c)
-      material.emissive.set(0x0b4d41)
-      material.emissiveIntensity = 0.5
-      this.cargoCrate.scale.setScalar(1.12)
-      return
-    }
-
-    material.color.set(0xffd166)
-    material.emissive.set(0x000000)
-    material.emissiveIntensity = 0
-    this.cargoCrate.scale.setScalar(1 + sceneState.progress * 0.18)
+  private renderNow(): void {
+    if (!this.contextAvailable || this.disposed) return
+    this.renderer.render(this.scene, this.camera)
   }
 
   private resize(): void {
@@ -352,14 +494,11 @@ export class FactoryRuntime {
     this.camera.aspect = width / height
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(width, height, false)
+    this.renderNow()
   }
 
   private handlePointerDown = (event: PointerEvent): void => {
-    if (this.sceneState?.inputLocked) {
-      return
-    }
-
-    this.renderer.domElement.focus()
+    if (this.sceneState?.inputLocked) return
     const rect = this.renderer.domElement.getBoundingClientRect()
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
@@ -367,85 +506,93 @@ export class FactoryRuntime {
     const hits = this.raycaster.intersectObjects(this.stationRecords.map((record) => record.hitbox), false)
     const stationId = hits[0]?.object.userData.stationId as StationId | undefined
 
-    if (stationId) {
+    if (stationId && stationId === this.sceneState?.activeStationId) {
       event.preventDefault()
       this.onStationSelect(stationId)
     }
   }
 
-  private handleKeyDown = (event: KeyboardEvent): void => {
-    const key = event.key.toLowerCase()
-
-    if (shouldIgnoreKeyboard(event.target) || this.sceneState?.inputLocked) {
-      return
-    }
-
-    if (movementKeys.has(key)) {
-      event.preventDefault()
-      this.keys.add(key)
-    }
-
-    if (key === 'e') {
-      event.preventDefault()
-      const nearestStation = this.findNearestStation()
-      if (nearestStation) {
-        this.onStationSelect(nearestStation)
-      }
-    }
-  }
-
-  private handleKeyUp = (event: KeyboardEvent): void => {
-    this.keys.delete(event.key.toLowerCase())
-  }
-
   private handleVisibility = (): void => {
     if (document.hidden) {
-      this.keys.clear()
+      cancelAnimationFrame(this.animationFrame)
+      this.animationFrame = 0
+      return
     }
+    this.timer.reset()
+    this.renderNow()
+    this.startLoop()
   }
 
   private handleContextLost = (event: Event): void => {
     event.preventDefault()
+    this.contextAvailable = false
     cancelAnimationFrame(this.animationFrame)
-    this.keys.clear()
+    this.animationFrame = 0
+    this.onContextLost?.()
   }
 
   private handleContextRestored = (): void => {
-    if (!this.disposed) {
-      this.resize()
-      this.loop()
-    }
-  }
-
-  private findNearestStation(): StationId | null {
-    let nearest: StationId | null = null
-    let nearestDistance = Number.POSITIVE_INFINITY
-
-    Object.entries(stationPositions).forEach(([stationId, position]) => {
-      const distance = this.player.position.distanceTo(position)
-      if (distance < nearestDistance) {
-        nearest = stationId as StationId
-        nearestDistance = distance
-      }
-    })
-
-    return nearestDistance <= 2.2 ? nearest : null
+    if (this.disposed) return
+    this.contextAvailable = true
+    this.timer.reset()
+    this.resize()
+    this.onContextRestored?.()
+    this.startLoop()
   }
 }
 
-function shouldIgnoreKeyboard(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false
-  }
-
-  return Boolean(target.closest('input, select, textarea, button, [role="dialog"]'))
+interface TextPanelOptions {
+  background: string
+  foreground: string
+  fontSize: number
 }
 
-function disposeMaterial(material: THREE.Material | THREE.Material[]): void {
-  if (Array.isArray(material)) {
-    material.forEach((item) => item.dispose())
-    return
+function createTextPanel(
+  text: string,
+  width: number,
+  height: number,
+  { background, foreground, fontSize }: TextPanelOptions,
+): THREE.Mesh {
+  const canvas = document.createElement('canvas')
+  canvas.width = 768
+  canvas.height = 128
+  const context = canvas.getContext('2d', { alpha: false })
+  if (context) {
+    context.fillStyle = background
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.fillStyle = foreground
+    context.font = `700 ${fontSize}px Arial, sans-serif`
+    context.textAlign = 'center'
+    context.textBaseline = 'middle'
+    context.fillText(text, canvas.width / 2, canvas.height / 2, canvas.width - 28)
   }
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, height),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, map: texture, side: THREE.DoubleSide }),
+  )
+  return panel
+}
 
-  material.dispose()
+function clearGroup(group: THREE.Group): void {
+  while (group.children.length > 0) {
+    const child = group.children.pop()
+    if (!child) continue
+    child.traverse(disposeObject)
+  }
+}
+
+function disposeObject(object: THREE.Object3D): void {
+  if (!(object instanceof THREE.Mesh)) return
+  object.geometry.dispose()
+  const materials = Array.isArray(object.material) ? object.material : [object.material]
+  materials.forEach((material) => {
+    if ('map' in material && material.map instanceof THREE.Texture) material.map.dispose()
+    material.dispose()
+  })
+}
+
+function shortLabel(value: string, maxLength = 24): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value
 }

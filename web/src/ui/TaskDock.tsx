@@ -1,6 +1,6 @@
 import { Check, Compass, Eraser, Lightbulb, RotateCcw, X } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { conceptGlossary } from '../game/content/rounds'
+import { codonMap, conceptGlossary } from '../game/content/rounds'
 import { formatChain } from '../game/simulation/gameReducer'
 import type { BaseRound, Feedback, GameRound, ProteinOption, ProteinRound, RoundState, TranslationRound } from '../types'
 
@@ -163,14 +163,18 @@ function BaseTask({
   roundState: RoundState
 }) {
   return (
-    <div className="task-surface">
+    <div className={`task-surface ${round.type === 'dna' ? 'dna-tray-interface' : 'rna-press-interface'}`}>
+      <div className="instrument-label">
+        <span>{round.type === 'dna' ? 'DNA assembly trays' : 'Transcription press'}</span>
+        <strong>{round.type === 'dna' ? 'Place one complementary base in each tray.' : 'Load RNA bases under the DNA template.'}</strong>
+      </div>
       <div className="sequence-board">
         <div>
-          <span>Template DNA</span>
+          <span>{round.type === 'dna' ? "Coding DNA blueprint (5' to 3')" : "Template DNA (3' to 5')"}</span>
           <SequenceTiles value={round.template} repairIndex={roundState.repairTarget?.kind === 'base' ? roundState.repairTarget.index : -1} />
         </div>
         <div>
-          <span>{round.type === 'transcription' ? 'mRNA build' : 'New DNA strand'}</span>
+          <span>{round.type === 'transcription' ? 'mRNA output strip' : 'Complementary DNA trays'}</span>
           <SequenceTiles
             expected={round.answer}
             repairIndex={roundState.repairTarget?.kind === 'base' ? roundState.repairTarget.index : -1}
@@ -183,8 +187,8 @@ function BaseTask({
         <p className="repair-callout">Tap the correct base to repair position {roundState.repairTarget.index + 1}.</p>
       )}
 
-      <div className="base-grid" aria-label="Base choices">
-        {round.options.map((base) => (
+      <div className="base-grid" aria-label={round.type === 'dna' ? 'DNA base cartridges' : 'RNA base cartridges'}>
+        {(roundState.narrowedChoices.length > 0 ? roundState.narrowedChoices : round.options).map((base) => (
           <button className="base-button" key={base} onClick={() => onAppendBase(base)} type="button">
             {base}
           </button>
@@ -235,6 +239,10 @@ function TranslationTask({
 
   return (
     <div className="task-surface">
+      <div className="instrument-label">
+        <span>Ribosome loading line</span>
+        <strong>Read each mRNA codon from 5' to 3', then load its amino acid capsule.</strong>
+      </div>
       <div className="sequence-board">
         <div>
           <span>mRNA</span>
@@ -246,6 +254,18 @@ function TranslationTask({
         </div>
       </div>
 
+      <div className="inline-codon-chart" aria-label="Simplified mRNA codon chart">
+        <span>mRNA codon chart</span>
+        <div>
+          {Object.entries(codonMap).map(([codon, aminoAcid]) => (
+            <p className={codon === round.codons[activeCodonIndex] ? 'active' : ''} key={codon}>
+              <strong>{codon}</strong>
+              <span>{aminoAcid}</span>
+            </p>
+          ))}
+        </div>
+      </div>
+
       {round.mode === 'perCodon' ? (
         <div className={`codon-card ${repairIndex === activeCodonIndex ? 'repair-target' : ''}`}>
           <p>
@@ -253,7 +273,7 @@ function TranslationTask({
           </p>
           <h3>{round.codons[activeCodonIndex]}</h3>
           <div className="answer-grid">
-            {round.codonChoices[activeCodonIndex].map((choice) => (
+            {(roundState.narrowedChoices.length > 0 ? roundState.narrowedChoices : round.codonChoices[activeCodonIndex]).map((choice) => (
               <button
                 aria-pressed={roundState.answers[activeCodonIndex] === choice}
                 className={`answer-button ${roundState.answers[activeCodonIndex] === choice ? 'selected' : ''}`}
@@ -295,7 +315,7 @@ function TranslationTask({
             <p>Codon {activeCodonIndex + 1} of {round.codons.length}</p>
             <h3>{round.codons[activeCodonIndex]}</h3>
             <div className="answer-grid">
-              {round.codonChoices[activeCodonIndex].map((choice) => (
+              {(roundState.narrowedChoices.length > 0 ? roundState.narrowedChoices : round.codonChoices[activeCodonIndex]).map((choice) => (
                 <button
                   aria-pressed={roundState.answers[activeCodonIndex] === choice}
                   className={`answer-button ${roundState.answers[activeCodonIndex] === choice ? 'selected' : ''}`}
@@ -335,6 +355,10 @@ function ProteinTask({
 }) {
   return (
     <div className="task-surface">
+      <div className="instrument-label">
+        <span>Function test chamber</span>
+        <strong>Compare fold and activity, then choose the result that matches this chain model.</strong>
+      </div>
       <div className="sequence-board single">
         <div>
           <span>Model chain fragment</span>
@@ -343,8 +367,21 @@ function ProteinTask({
         </div>
       </div>
 
+      <div className="protein-comparison" aria-label="Normal and variant protein comparison">
+        <div className="normal">
+          <span className="fold-model" aria-hidden="true" />
+          <strong>Normal fold</strong>
+          <small>Active site fits its target</small>
+        </div>
+        <div className="variant">
+          <span className="fold-model" aria-hidden="true" />
+          <strong>Variant fold</strong>
+          <small>Shape may change activity or pigment</small>
+        </div>
+      </div>
+
       <div className="trait-grid" aria-label="Trait choices">
-        {round.options.map((option) => (
+        {round.options.filter((option) => roundState.narrowedChoices.length === 0 || roundState.narrowedChoices.includes(option.trait)).map((option) => (
           <button
             aria-pressed={roundState.selectedTrait === option.trait}
             className={[

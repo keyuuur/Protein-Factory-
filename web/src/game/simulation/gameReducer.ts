@@ -1,4 +1,8 @@
-import { rounds, stationIdForRoundType } from '../content/rounds'
+import {
+  buildRunManifest,
+  buildTransferTasks,
+  stationIdForRoundType,
+} from '../content/rounds'
 import {
   createMissedSkill,
   getExpectedAnswer,
@@ -15,10 +19,12 @@ import type {
   ReplayChallenge,
   RoundState,
   StationId,
+  SupportEvent,
+  TeacherSettings,
 } from '../../types'
 
 export type GameAction =
-  | { type: 'START_GAME'; demoMode: boolean; firstName: string; period: string; now: number }
+  | { type: 'START_GAME'; demoMode: boolean; firstName: string; period: string; settings: TeacherSettings; now: number }
   | { type: 'START_ROUNDS' }
   | { type: 'BEGIN_ROUND' }
   | { type: 'SELECT_STATION'; stationId: StationId }
@@ -38,249 +44,161 @@ export type GameAction =
   | { type: 'OPEN_CODON_WHEEL' }
   | { type: 'CLOSE_CODON_WHEEL' }
   | { type: 'CONTINUE_AFTER_SUCCESS'; now: number }
+  | { type: 'SUBMIT_TRANSFER'; answer: string; now: number }
+  | { type: 'LOCAL_SAVE_FAILED' }
   | { type: 'REPLAY'; now: number }
   | { type: 'RESTART'; now: number }
 
+const defaultSettings: TeacherSettings = {
+  replayMode: 'full',
+  soundEnabled: false,
+  supportMode: 'standard',
+}
+
 export function createRoundState(round: GameRound): RoundState {
   return {
-    input: '',
     answers: round.type === 'translation' ? new Array(round.codons.length).fill('') : [],
-    currentCodonIndex: 0,
     attempts: 0,
-    mistakes: 0,
-    showHint: false,
+    currentCodonIndex: 0,
     hintUsed: false,
+    input: '',
+    mistakes: 0,
+    narrowedChoices: [],
+    repairTarget: null,
     selectedProtein: '',
     selectedTrait: '',
-    repairTarget: null,
+    showHint: false,
+    supportEvents: [],
   }
 }
 
 export function createInitialGameState(now = Date.now()): GameSessionState {
+  const attemptId = createAttemptId(now)
+  const runManifest = buildRunManifest(attemptId)
   return {
-    attemptId: createAttemptId(now),
-    screen: 'start',
-    identity: {
-      firstName: '',
-      isDemo: false,
-      period: '',
-    },
-    currentRoundIndex: 0,
-    roundState: createRoundState(rounds[0]),
-    feedback: null,
-    roundResults: [],
-    missedSkills: [],
-    startedAt: now,
+    attemptId,
     completedAt: null,
+    currentRoundIndex: 0,
+    currentTransferIndex: 0,
     elapsedSeconds: 0,
+    feedback: null,
+    identity: { firstName: '', isDemo: false, period: '' },
     isCodonWheelOpen: false,
-    taskDockOpen: false,
-    selectedStationId: null,
-    saveStatus: 'local-draft',
+    missedSkills: [],
+    recoveredConcepts: [],
     replayChallenge: null,
+    roundResults: [],
+    roundState: createRoundState(runManifest.rounds[0]),
+    runManifest,
+    saveStatus: 'local-draft',
+    screen: 'start',
+    selectedStationId: null,
+    settings: defaultSettings,
+    startedAt: now,
+    taskDockOpen: false,
+    transferResults: [],
+    transferTasks: [],
   }
 }
 
 export function gameReducer(state: GameSessionState, action: GameAction): GameSessionState {
-  const currentRound = rounds[state.currentRoundIndex]
+  const currentRound = state.runManifest.rounds[state.currentRoundIndex]
 
   switch (action.type) {
     case 'START_GAME': {
-      const trimmedName = action.firstName.trim()
-      const firstName = action.demoMode ? 'Demo Student' : trimmedName
-
-      if (!firstName || !action.period) {
-        return state
-      }
-
+      const firstName = action.demoMode ? 'Demo Student' : action.firstName.trim()
+      if (!firstName || !action.period) return state
+      const fresh = createInitialGameState(action.now)
       return {
-        ...createInitialGameState(action.now),
-        identity: {
-          firstName,
-          isDemo: action.demoMode,
-          period: action.period,
-        },
+        ...fresh,
+        identity: { firstName, isDemo: action.demoMode, period: action.period },
         screen: 'tutorial',
+        settings: action.settings,
       }
     }
-
     case 'START_ROUNDS':
-      return {
-        ...state,
-        screen: 'intro',
-        feedback: null,
-      }
-
+      return { ...state, feedback: null, screen: 'intro' }
     case 'BEGIN_ROUND':
-      if (state.screen !== 'intro') {
-        return state
-      }
-      return {
-        ...state,
-        screen: 'playing',
-        taskDockOpen: false,
-        selectedStationId: null,
-        feedback: buildStationPrompt(currentRound),
-      }
-
+      return state.screen === 'intro'
+        ? { ...state, feedback: buildStationPrompt(currentRound), screen: 'playing' }
+        : state
     case 'SELECT_STATION':
-      if (state.screen !== 'playing') {
-        return state
-      }
-      return selectStation(state, action.stationId)
-
+      return state.screen === 'playing' ? selectStation(state, action.stationId) : state
     case 'OPEN_ACTIVE_STATION':
-      if (state.screen !== 'playing') {
-        return state
-      }
-      return selectStation(state, stationIdForRoundType(currentRound.type))
-
+      return state.screen === 'playing'
+        ? selectStation(state, stationIdForRoundType(currentRound.type))
+        : state
     case 'CLOSE_TASK_DOCK':
-      return {
-        ...state,
-        taskDockOpen: false,
-        selectedStationId: null,
-        isCodonWheelOpen: false,
-      }
-
+      return { ...state, isCodonWheelOpen: false, selectedStationId: null, taskDockOpen: false }
     case 'APPEND_BASE':
-      if (!isBaseRound(currentRound) || !state.taskDockOpen) {
-        return state
-      }
-      if (state.roundState.repairTarget?.kind === 'base') {
-        const index = state.roundState.repairTarget.index
-        if (index >= 0 && index < currentRound.answer.length) {
-          const input = state.roundState.input.padEnd(currentRound.answer.length, '-')
-          return {
-            ...state,
-            feedback: {
-              kind: 'info',
-              title: 'Repair placed.',
-              message: 'Check the sequence when you are ready.',
-            },
-            roundState: {
-              ...state.roundState,
-              input: replaceAt(input, index, action.base).replaceAll('-', ''),
-              repairTarget: null,
-            },
-          }
-        }
-      }
-      if (state.roundState.input.length >= currentRound.answer.length) {
-        return state
-      }
-      return {
-        ...state,
-        feedback: null,
-        roundState: {
-          ...state.roundState,
-          input: state.roundState.input + action.base,
-          repairTarget: null,
-        },
-      }
-
+      return appendBase(state, currentRound, action.base)
     case 'CLEAR_INPUT':
-      return {
-        ...state,
-        feedback: null,
-        roundState: {
-          ...state.roundState,
-          input: '',
-          repairTarget: null,
-        },
-      }
-
+      return { ...state, feedback: null, roundState: { ...state.roundState, input: '', repairTarget: null } }
     case 'BACKSPACE':
       return {
         ...state,
         feedback: null,
-        roundState: {
-          ...state.roundState,
-          input: state.roundState.input.slice(0, -1),
-          repairTarget: null,
-        },
+        roundState: { ...state.roundState, input: state.roundState.input.slice(0, -1), repairTarget: null },
       }
-
     case 'CHECK_BASE_ROUND':
       return checkBaseRound(state, currentRound)
-
     case 'SELECT_TRANSLATION':
       return selectTranslation(state, currentRound, action.index, action.value)
-
     case 'GO_TO_TRANSLATION_CODON':
-      return goToTranslationCodon(state, currentRound, action.index)
-
+      return currentRound.type === 'translation' && action.index >= 0 && action.index < currentRound.codons.length
+        ? { ...state, roundState: { ...state.roundState, currentCodonIndex: action.index } }
+        : state
     case 'CHECK_TRANSLATION_CODON':
       return checkTranslationCodon(state, currentRound)
-
     case 'CHECK_FULL_TRANSLATION':
       return checkFullTranslation(state, currentRound)
-
     case 'SELECT_PROTEIN':
-      return selectProtein(state, currentRound, action.option)
-
+      return currentRound.type === 'protein' && state.taskDockOpen
+        ? {
+            ...state,
+            feedback: { kind: 'info', title: 'Prediction selected.', message: 'Run the function test when ready.' },
+            roundState: {
+              ...state.roundState,
+              repairTarget: null,
+              selectedProtein: action.option.protein,
+              selectedTrait: action.option.trait,
+            },
+          }
+        : state
     case 'CHECK_PROTEIN':
       return checkProtein(state, currentRound)
-
-    case 'TOGGLE_HINT': {
-      const showHint = !state.roundState.showHint
-      return {
-        ...state,
-        roundState: {
-          ...state.roundState,
-          showHint,
-          hintUsed: state.roundState.hintUsed || showHint,
-        },
-      }
-    }
-
+    case 'TOGGLE_HINT':
+      return toggleHint(state, currentRound)
     case 'OPEN_CODON_WHEEL':
-      if (currentRound.type !== 'translation') {
-        return {
-          ...state,
-          feedback: {
-            kind: 'info',
-            title: 'Codon Wheel locked.',
-            message: 'Use the codon helper at the Ribosome Galley during translation rounds.',
-          },
-        }
-      }
-      return {
-        ...state,
-        isCodonWheelOpen: true,
-      }
-
+      return currentRound.type === 'translation'
+        ? {
+            ...state,
+            isCodonWheelOpen: true,
+            roundState: addSupportEvent(state.roundState, {
+              affectsIndependence: false,
+              attempt: state.roundState.attempts,
+              choices: [],
+              kind: 'codon-chart',
+              location: `codon ${state.roundState.currentCodonIndex + 1}`,
+              rule: 'Use the mRNA codon chart.',
+              stage: currentRound.context.stage,
+            }),
+          }
+        : state
     case 'CLOSE_CODON_WHEEL':
-      return {
-        ...state,
-        isCodonWheelOpen: false,
-      }
-
+      return { ...state, isCodonWheelOpen: false }
     case 'CONTINUE_AFTER_SUCCESS':
-      if (state.screen !== 'success') {
-        return state
-      }
-      return continueAfterSuccess(state, action.now)
-
+      return state.screen === 'success' ? continueAfterSuccess(state, action.now) : state
+    case 'SUBMIT_TRANSFER':
+      return submitTransfer(state, action.answer, action.now)
+    case 'LOCAL_SAVE_FAILED':
+      return state.saveStatus === 'failed-local' ? state : { ...state, saveStatus: 'failed-local' }
     case 'REPLAY':
-      return {
-        ...createInitialGameState(action.now),
-        identity: state.identity,
-        screen: 'intro',
-        replayChallenge: buildReplayChallenge(state),
-      }
-
-    case 'RESTART':
-      return {
-        ...createInitialGameState(action.now),
-        identity: {
-          firstName: '',
-          isDemo: false,
-          period: state.identity.period,
-        },
-        replayChallenge: null,
-      }
-
+      return replay(state, action.now)
+    case 'RESTART': {
+      const fresh = createInitialGameState(action.now)
+      return { ...fresh, identity: { firstName: '', isDemo: false, period: state.identity.period }, settings: state.settings }
+    }
     default:
       return state
   }
@@ -291,574 +209,355 @@ export function formatChain(state: RoundState): string {
 }
 
 export function selectActiveStationId(state: GameSessionState): StationId {
-  return stationIdForRoundType(rounds[state.currentRoundIndex].type)
+  return stationIdForRoundType(state.runManifest.rounds[state.currentRoundIndex].type)
 }
 
 export function selectCompletedStationIds(state: GameSessionState): StationId[] {
-  const completedTypes = new Set(state.roundResults.filter((result) => result.correct).map((result) => result.type))
-  return [...completedTypes].map((type) => stationIdForRoundType(type))
+  return [...new Set(state.roundResults.filter((result) => result.correct).map((result) => stationIdForRoundType(result.type)))]
 }
 
 export function selectReplayChallengeStatus(state: GameSessionState): string {
   return state.replayChallenge?.label ?? ''
 }
 
-function selectStation(state: GameSessionState, stationId: StationId): GameSessionState {
-  const currentRound = rounds[state.currentRoundIndex]
-  const activeStationId = stationIdForRoundType(currentRound.type)
-
-  if (stationId !== activeStationId) {
+function appendBase(state: GameSessionState, round: GameRound, base: string): GameSessionState {
+  if (!isBaseRound(round) || !state.taskDockOpen) return state
+  const repair = state.roundState.repairTarget
+  if (repair?.kind === 'base') {
+    const padded = state.roundState.input.padEnd(round.answer.length, '-')
     return {
       ...state,
-      selectedStationId: activeStationId,
-      taskDockOpen: false,
-      feedback: {
-        kind: 'info',
-        title: `Go to ${stationLabel(activeStationId)}.`,
-        message: `This step uses ${currentRound.shortTitle}. Open the highlighted station.`,
-      },
+      feedback: { kind: 'info', title: 'Repair placed.', message: 'Check the completed sequence.' },
+      roundState: { ...state.roundState, input: replaceAt(padded, repair.index, base), repairTarget: null },
     }
   }
+  if (state.roundState.input.length >= round.answer.length) return state
+  return { ...state, feedback: null, roundState: { ...state.roundState, input: state.roundState.input + base } }
+}
 
-  return {
-    ...state,
-    selectedStationId: stationId,
-    taskDockOpen: true,
-    feedback: {
-      kind: 'info',
-      title: stationLabel(stationId),
-      message: 'Task ready. Complete this factory step.',
-    },
+function selectStation(state: GameSessionState, stationId: StationId): GameSessionState {
+  const round = state.runManifest.rounds[state.currentRoundIndex]
+  const active = stationIdForRoundType(round.type)
+  if (stationId !== active) {
+    return {
+      ...state,
+      feedback: { kind: 'info', title: `Go to ${stationLabel(active)}.`, message: 'The highlighted station has the current order.' },
+      selectedStationId: active,
+      taskDockOpen: false,
+    }
   }
+  return { ...state, feedback: null, selectedStationId: active, taskDockOpen: true }
 }
 
 function checkBaseRound(state: GameSessionState, round: GameRound): GameSessionState {
-  if (!isBaseRound(round) || !state.taskDockOpen) {
-    return state
-  }
-
-  const attemptedState = {
-    ...state.roundState,
-    attempts: state.roundState.attempts + 1,
-  }
-
-  if (state.roundState.input.length < round.answer.length) {
-    return {
-      ...state,
-      feedback: {
-        kind: 'info',
-        title: 'Finish the sequence.',
-        message: `Add ${round.answer.length - state.roundState.input.length} more base${round.answer.length - state.roundState.input.length === 1 ? '' : 's'} before checking.`,
-      },
-    }
-  }
-
-  const isCorrect = attemptedState.input === round.answer
-
-  if (!isCorrect) {
-    return recordMistake(state, round, attemptedState, attemptedState.input)
-  }
-
-  return completeRound(state, round, attemptedState, attemptedState.input)
+  if (!isBaseRound(round) || !state.taskDockOpen || state.roundState.input.length !== round.answer.length) return state
+  const attempted = { ...state.roundState, attempts: state.roundState.attempts + 1 }
+  return attempted.input === round.answer
+    ? completeRound(state, round, attempted, attempted.input)
+    : recordMistake(state, round, attempted, attempted.input)
 }
 
-function selectTranslation(
-  state: GameSessionState,
-  round: GameRound,
-  index: number,
-  value: string,
-): GameSessionState {
-  if (round.type !== 'translation' || !state.taskDockOpen) {
-    return state
-  }
-
-  const nextAnswers = [...state.roundState.answers]
-  nextAnswers[index] = value
-  const repairingThisCodon =
-    state.roundState.repairTarget?.kind === 'codon' && state.roundState.repairTarget.index === index
-  const nextActiveIndex =
-    round.mode === 'full' ? getNextFullTranslationIndex(nextAnswers, index, round.answers.length) : state.roundState.currentCodonIndex
-  const selectedState = {
-    ...state.roundState,
-    answers: nextAnswers,
-    currentCodonIndex: nextActiveIndex,
-    repairTarget: repairingThisCodon ? null : state.roundState.repairTarget,
-  }
-
-  if (round.mode === 'full') {
-    return {
-      ...state,
-      roundState: selectedState,
-      feedback: {
-        kind: 'info',
-        title: repairingThisCodon ? 'Repair placed.' : 'Cargo loaded.',
-        message: nextAnswers.every(Boolean)
-          ? 'Every codon has cargo. Check the full sequence.'
-          : 'Keep loading amino acid cargo one codon at a time.',
-      },
-    }
-  }
-
+function selectTranslation(state: GameSessionState, round: GameRound, index: number, value: string): GameSessionState {
+  if (round.type !== 'translation' || !state.taskDockOpen) return state
+  const answers = [...state.roundState.answers]
+  answers[index] = value
+  const nextMissing = answers.findIndex((answer, answerIndex) => answerIndex > index && !answer)
   return {
     ...state,
-    roundState: selectedState,
-    feedback: {
-      kind: 'info',
-      title: repairingThisCodon ? 'Repair placed.' : 'Choice selected.',
-      message: 'Check the codon when you are ready.',
-    },
-  }
-}
-
-function goToTranslationCodon(state: GameSessionState, round: GameRound, index: number): GameSessionState {
-  if (round.type !== 'translation' || !state.taskDockOpen) {
-    return state
-  }
-
-  if (index < 0 || index >= round.codons.length) {
-    return state
-  }
-
-  return {
-    ...state,
+    feedback: null,
     roundState: {
       ...state.roundState,
-      currentCodonIndex: index,
+      answers,
+      currentCodonIndex: nextMissing === -1 ? index : nextMissing,
+      repairTarget: null,
     },
   }
 }
 
 function checkTranslationCodon(state: GameSessionState, round: GameRound): GameSessionState {
-  if (round.type !== 'translation' || round.mode !== 'perCodon' || !state.taskDockOpen) {
-    return state
-  }
-
+  if (round.type !== 'translation' || round.mode !== 'perCodon' || !state.taskDockOpen) return state
   const index = state.roundState.currentCodonIndex
-  const selected = state.roundState.answers[index]
-
-  if (!selected) {
-    return {
-      ...state,
-      feedback: {
-        kind: 'info',
-        title: 'Choose an amino acid.',
-        message: `Pick the amino acid for ${round.codons[index]}, then check it.`,
-      },
-    }
-  }
-
-  const attemptedState = {
-    ...state.roundState,
-    attempts: state.roundState.attempts + 1,
-  }
-  const expected = round.answers[index]
-
-  if (selected !== expected) {
-    return recordMistake(state, round, attemptedState, attemptedState.answers.filter(Boolean).join('-'))
-  }
-
+  if (!state.roundState.answers[index]) return state
+  const attempted = { ...state.roundState, attempts: state.roundState.attempts + 1 }
+  if (attempted.answers[index] !== round.answers[index]) return recordMistake(state, round, attempted, attempted.answers.join('-'))
   if (index < round.answers.length - 1) {
-    return {
-      ...state,
-      roundState: {
-        ...attemptedState,
-        currentCodonIndex: index + 1,
-        repairTarget: null,
-      },
-      feedback: {
-        kind: 'success',
-        title: 'Codon translated.',
-        message: 'Factory conveyor advanced to the next codon.',
-      },
-    }
+    return { ...state, feedback: { kind: 'success', title: 'Cargo loaded.', message: 'Read the next codon.' }, roundState: { ...attempted, currentCodonIndex: index + 1 } }
   }
-
-  return completeRound(state, round, attemptedState, attemptedState.answers.join('-'))
+  return completeRound(state, round, attempted, attempted.answers.join('-'))
 }
 
 function checkFullTranslation(state: GameSessionState, round: GameRound): GameSessionState {
-  if (round.type !== 'translation' || round.mode !== 'full' || !state.taskDockOpen) {
-    return state
-  }
-
-  const attemptedState = {
-    ...state.roundState,
-    attempts: state.roundState.attempts + 1,
-  }
-  const hasAllAnswers = attemptedState.answers.every(Boolean)
-
-  if (!hasAllAnswers) {
-    return {
-      ...state,
-      feedback: {
-        kind: 'info',
-        title: 'Finish every codon.',
-        message: 'Select one amino acid for each codon before checking the chain.',
-      },
-    }
-  }
-
-  const isCorrect =
-    hasAllAnswers && attemptedState.answers.every((answer, index) => answer === round.answers[index])
-  const submitted = attemptedState.answers.filter(Boolean).join('-')
-
-  if (!isCorrect) {
-    return recordMistake(state, round, attemptedState, submitted)
-  }
-
-  return completeRound(state, round, attemptedState, attemptedState.answers.join('-'))
-}
-
-function selectProtein(state: GameSessionState, round: GameRound, option: ProteinOption): GameSessionState {
-  if (round.type !== 'protein' || !state.taskDockOpen) {
-    return state
-  }
-
-  return {
-    ...state,
-    roundState: {
-      ...state.roundState,
-      selectedProtein: option.protein,
-      selectedTrait: option.trait,
-      repairTarget: state.roundState.repairTarget?.kind === 'protein' ? null : state.roundState.repairTarget,
-    },
-    feedback: {
-      kind: 'info',
-      title: 'Trait selected.',
-      message: 'Check the trait when you are ready.',
-    },
-  }
+  if (round.type !== 'translation' || round.mode !== 'full' || !state.taskDockOpen || !state.roundState.answers.every(Boolean)) return state
+  const attempted = { ...state.roundState, attempts: state.roundState.attempts + 1 }
+  const submitted = attempted.answers.join('-')
+  return attempted.answers.every((answer, index) => answer === round.answers[index])
+    ? completeRound(state, round, attempted, submitted)
+    : recordMistake(state, round, attempted, submitted)
 }
 
 function checkProtein(state: GameSessionState, round: GameRound): GameSessionState {
-  if (round.type !== 'protein' || !state.taskDockOpen) {
-    return state
-  }
-
-  if (!state.roundState.selectedTrait) {
-    return {
-      ...state,
-      feedback: {
-        kind: 'info',
-        title: 'Choose a trait.',
-        message: 'Select the protein and trait match before checking.',
-      },
-    }
-  }
-
-  const attemptedState = {
-    ...state.roundState,
-    attempts: state.roundState.attempts + 1,
-  }
-  const isCorrect = state.roundState.selectedTrait === round.correctTrait
-
-  if (!isCorrect) {
-    return recordMistake(state, round, attemptedState, state.roundState.selectedTrait)
-  }
-
-  return completeRound(
-    state,
-    round,
-    attemptedState,
-    state.roundState.selectedTrait,
-    state.roundState.selectedProtein,
-    state.roundState.selectedTrait,
-  )
+  if (round.type !== 'protein' || !state.taskDockOpen || !state.roundState.selectedTrait) return state
+  const attempted = { ...state.roundState, attempts: state.roundState.attempts + 1 }
+  return attempted.selectedTrait === round.correctTrait
+    ? completeRound(state, round, attempted, attempted.selectedTrait, attempted.selectedProtein, attempted.selectedTrait)
+    : recordMistake(state, round, attempted, attempted.selectedTrait)
 }
 
-function recordMistake(
-  state: GameSessionState,
-  round: GameRound,
-  attemptedState: RoundState,
-  submitted: string,
-): GameSessionState {
-  const repairTarget = buildRepairTarget(round, submitted, attemptedState)
-  const errorState = {
-    ...attemptedState,
-    mistakes: attemptedState.mistakes + 1,
-    repairTarget,
-    currentCodonIndex: repairTarget?.kind === 'codon' ? repairTarget.index : attemptedState.currentCodonIndex,
-  }
-  const category = repairTarget?.category ?? getFallbackCategory(round)
+function toggleHint(state: GameSessionState, round: GameRound): GameSessionState {
+  const showHint = !state.roundState.showHint
+  const next = showHint
+    ? addSupportEvent(state.roundState, {
+        affectsIndependence: true,
+        attempt: state.roundState.attempts,
+        choices: [],
+        kind: 'explicit-hint',
+        location: round.shortTitle,
+        rule: round.hint,
+        stage: round.context.stage,
+      })
+    : state.roundState
+  return { ...state, roundState: { ...next, hintUsed: next.hintUsed || showHint, showHint } }
+}
 
+function recordMistake(state: GameSessionState, round: GameRound, attempted: RoundState, submitted: string): GameSessionState {
+  const repairTarget = buildRepairTarget(round, submitted, attempted)
+  const mistakeNumber = attempted.mistakes + 1
+  const shouldNarrow = state.settings.supportMode === 'guided' || mistakeNumber >= 2
+  const narrowedChoices = shouldNarrow ? getNarrowedChoices(round, repairTarget) : []
+  const supportEvent: SupportEvent = {
+    affectsIndependence: true,
+    attempt: attempted.attempts,
+    choices: narrowedChoices,
+    kind: shouldNarrow ? 'narrowed-choices' : 'error-location-rule',
+    location: repairTarget?.label ?? round.shortTitle,
+    rule: diagnosticRule(round, repairTarget),
+    stage: round.context.stage,
+  }
+  const roundState = {
+    ...addSupportEvent(attempted, supportEvent),
+    currentCodonIndex: repairTarget?.kind === 'codon' ? repairTarget.index : attempted.currentCodonIndex,
+    mistakes: mistakeNumber,
+    narrowedChoices,
+    repairTarget,
+  }
+  const category = repairTarget?.category ?? fallbackCategory(round)
   return {
     ...state,
-    roundState: errorState,
-    missedSkills: [
-      ...state.missedSkills,
-      createMissedSkill(round, state.currentRoundIndex, errorState, submitted, 'mistake', category),
-    ],
-    feedback: buildErrorFeedback(round, submitted, errorState),
+    feedback: buildErrorFeedback(round, roundState, mistakeNumber),
+    missedSkills: [...state.missedSkills, createMissedSkill(round, state.currentRoundIndex, roundState, submitted, 'mistake', category)],
+    roundState,
   }
 }
 
 function completeRound(
   state: GameSessionState,
   round: GameRound,
-  attemptedState: RoundState,
+  roundState: RoundState,
   submitted: string,
   selectedProtein = '',
   selectedTrait = '',
 ): GameSessionState {
-  const result = getRoundResult(
-    round,
-    state.currentRoundIndex,
-    attemptedState,
-    submitted,
-    true,
-    selectedProtein,
-    selectedTrait,
-  )
-
+  const result = getRoundResult(round, state.currentRoundIndex, roundState, submitted, true, selectedProtein, selectedTrait)
   return {
     ...state,
-    roundState: {
-      ...attemptedState,
-      repairTarget: null,
+    feedback: {
+      detail: `Produced: ${getExpectedAnswer(round)}`,
+      kind: 'success',
+      message: shipmentMessage(round),
+      title: round.context.orderRole === 'normal' ? 'Order A stage complete' : 'Order B stage complete',
     },
-    roundResults: upsertRoundResult(state.roundResults, result),
-    feedback: buildSuccessFeedback(round),
-    screen: 'success',
-    taskDockOpen: false,
-    selectedStationId: null,
     isCodonWheelOpen: false,
+    roundResults: upsertRoundResult(state.roundResults, result),
+    roundState: { ...roundState, narrowedChoices: [], repairTarget: null },
     saveStatus: 'saved-local',
+    screen: 'success',
+    selectedStationId: stationIdForRoundType(round.type),
+    taskDockOpen: false,
   }
 }
 
 function continueAfterSuccess(state: GameSessionState, now: number): GameSessionState {
-  if (state.currentRoundIndex >= rounds.length - 1) {
-    return {
-      ...state,
-      screen: 'end',
-      completedAt: now,
-      elapsedSeconds: Math.max(1, Math.round((now - state.startedAt) / 1000)),
-      feedback: null,
-      saveStatus: 'saved-local',
+  const rounds = state.runManifest.rounds
+  if (state.currentRoundIndex === rounds.length - 1) {
+    const transferTasks = buildTransferTasks(state.runManifest, state.roundResults)
+    if (transferTasks.length > 0) {
+      return { ...state, currentTransferIndex: 0, feedback: null, screen: 'transfer', transferTasks }
     }
+    return finishRun(state, now)
   }
-
-  const nextRoundIndex = state.currentRoundIndex + 1
-  const nextRound = rounds[nextRoundIndex]
-  const nextStationId = stationIdForRoundType(nextRound.type)
-
+  const currentRoundIndex = state.currentRoundIndex + 1
+  const round = rounds[currentRoundIndex]
   return {
     ...state,
-    currentRoundIndex: nextRoundIndex,
-    roundState: createRoundState(nextRound),
-    feedback: {
-      kind: 'info',
-      title: `${stationLabel(nextStationId)} ready.`,
-      message: nextRound.prompt,
-    },
-    screen: 'playing',
-    taskDockOpen: true,
-    selectedStationId: nextStationId,
+    currentRoundIndex,
+    feedback: null,
+    roundState: createRoundState(round),
     saveStatus: 'local-draft',
+    screen: 'playing',
+    selectedStationId: stationIdForRoundType(round.type),
+    taskDockOpen: true,
   }
 }
 
-function buildStationPrompt(round: GameRound): Feedback {
+function submitTransfer(state: GameSessionState, answer: string, now: number): GameSessionState {
+  if (state.screen !== 'transfer') return state
+  const task = state.transferTasks[state.currentTransferIndex]
+  if (!task) return finishRun(state, now)
+  const recovered = answer === task.expected
+  const transferResults = [...state.transferResults, {
+    expected: task.expected,
+    recovered,
+    sourcePairId: task.sourcePairId,
+    submitted: answer,
+    targetCategory: task.targetCategory,
+    targetStage: task.targetStage,
+    taskId: task.id,
+  }]
+  const recoveredConcepts = recovered && !state.recoveredConcepts.includes(task.targetCategory)
+    ? [...state.recoveredConcepts, task.targetCategory]
+    : state.recoveredConcepts
+  if (state.currentTransferIndex < state.transferTasks.length - 1) {
+    return { ...state, currentTransferIndex: state.currentTransferIndex + 1, recoveredConcepts, transferResults }
+  }
+  return finishRun({ ...state, recoveredConcepts, transferResults }, now)
+}
+
+function finishRun(state: GameSessionState, now: number): GameSessionState {
   return {
-    kind: 'info',
-    title: stationLabel(stationIdForRoundType(round.type)),
-    message: 'Tap the highlighted station to begin.',
+    ...state,
+    completedAt: now,
+    elapsedSeconds: Math.max(1, Math.round((now - state.startedAt) / 1000)),
+    feedback: null,
+    saveStatus: 'saved-local',
+    screen: 'end',
   }
 }
 
-function buildSuccessFeedback(round: GameRound): Feedback {
-  const action =
-    round.type === 'protein'
-      ? 'Trait shipped.'
-      : round.type === 'translation'
-        ? 'Amino acid chain advanced.'
-        : 'Sequence completed.'
-
+function replay(state: GameSessionState, now: number): GameSessionState {
+  const fresh = createInitialGameState(now)
+  const runManifest = buildRunManifest(fresh.attemptId, [state.runManifest.pairId])
+  if (state.settings.replayMode === 'targeted') {
+    const transferTasks = buildTransferTasks(state.runManifest, state.roundResults, fresh.attemptId)
+    if (transferTasks.length > 0) {
+      return {
+        ...fresh,
+        identity: state.identity,
+        replayChallenge: buildReplayChallenge(state),
+        runManifest,
+        screen: 'transfer',
+        settings: state.settings,
+        transferTasks,
+      }
+    }
+  }
   return {
-    kind: 'success',
-    title: action,
-    message: buildShipmentMessage(round),
-    detail: `${round.type === 'translation' ? 'Amino acid chain' : 'Expected'}: ${getExpectedAnswer(round)}`,
+    ...fresh,
+    identity: state.identity,
+    replayChallenge: buildReplayChallenge(state),
+    roundState: createRoundState(runManifest.rounds[0]),
+    runManifest,
+    screen: 'intro',
+    settings: state.settings,
   }
 }
 
-function buildErrorFeedback(round: GameRound, submitted: string, state: RoundState): Feedback {
-  const message = buildDiagnosticMessage(round, submitted, state)
-
-  return {
-    kind: 'error',
-    title: getErrorTitle(round),
-    message,
-    detail: state.repairTarget
-      ? `Submitted: ${submitted || 'nothing yet'}. Repair the highlighted ${state.repairTarget.kind === 'codon' ? 'codon' : 'tile'}.`
-      : `Submitted: ${submitted || 'nothing yet'}.`,
-  }
-}
-
-function getErrorTitle(round: GameRound): string {
-  if (round.type === 'dna') {
-    return 'Check DNA pairing.'
-  }
-
-  if (round.type === 'transcription') {
-    return 'Check mRNA pairing.'
-  }
-
-  if (round.type === 'translation') {
-    return 'Check codon translation.'
-  }
-
-  return 'Check model trait match.'
-}
-
-function buildDiagnosticMessage(round: GameRound, submitted: string, state: RoundState): string {
-  if (state.repairTarget) {
-    return state.repairTarget.label
-  }
-
-  if (isBaseRound(round)) {
-    const missingCount = round.answer.length - submitted.length
-    if (missingCount > 0) {
-      return `This needs ${round.answer.length} bases. Add ${missingCount} more before checking.`
-    }
-
-    const mismatch = findFirstMismatch(submitted, round.answer)
-    if (mismatch !== -1) {
-      const templateBase = round.template[mismatch]
-      const expectedBase = round.answer[mismatch]
-      const submittedBase = submitted[mismatch] ?? 'blank'
-      const molecule = round.type === 'transcription' ? 'mRNA' : 'DNA'
-      return `Position ${mismatch + 1}: template ${templateBase} pairs with ${expectedBase} in ${molecule}, not ${submittedBase}.`
-    }
-  }
-
-  if (round.type === 'translation') {
-    const mismatch = round.answers.findIndex((answer, index) => state.answers[index] && state.answers[index] !== answer)
-    if (mismatch !== -1) {
-      return `${round.codons[mismatch]} codes for ${round.answers[mismatch]}, not ${state.answers[mismatch]}.`
-    }
-
-    const missing = round.answers.findIndex((_, index) => !state.answers[index])
-    if (missing !== -1) {
-      return `Codon ${missing + 1} still needs an amino acid before the chain can ship.`
-    }
-  }
-
-  if (round.type === 'protein') {
-    return `${state.selectedProtein || 'That choice'} does not match the short ${round.chain} model. In this game model, the matching trait is ${round.correctTrait}.`
-  }
-
-  return 'Check the model, then repair this factory step.'
-}
-
-function buildShipmentMessage(round: GameRound): string {
-  if (round.type === 'dna') {
-    return `DNA copy shipped: ${round.answer}.`
-  }
-
-  if (round.type === 'transcription') {
-    return `mRNA message printed: ${round.answer}.`
-  }
-
-  if (round.type === 'translation') {
-    return `Amino acid chain shipped: ${round.answers.join('-')}.`
-  }
-
-  if (round.type === 'protein') {
-    return `Model trait shipped: ${round.correctTrait}.`
-  }
-
-  return 'Factory step shipped.'
-}
-
-function findFirstMismatch(submitted: string, expected: string): number {
-  for (let index = 0; index < expected.length; index += 1) {
-    if (submitted[index] !== expected[index]) {
-      return index
-    }
-  }
-
-  return -1
+function addSupportEvent(roundState: RoundState, event: SupportEvent): RoundState {
+  const duplicate = roundState.supportEvents.some((item) => item.kind === event.kind && item.location === event.location)
+  return duplicate ? roundState : { ...roundState, supportEvents: [...roundState.supportEvents, event] }
 }
 
 function buildRepairTarget(round: GameRound, submitted: string, state: RoundState): RepairTarget | null {
   if (isBaseRound(round)) {
-    const mismatch = findFirstMismatch(submitted, round.answer)
-    const repairIndex = mismatch === -1 ? 0 : mismatch
-    const expected = round.answer[repairIndex] ?? ''
-    const submittedBase = submitted[repairIndex] ?? 'blank'
-    const templateBase = round.template[repairIndex] ?? 'blank'
-    const category = getBaseCategory(round, submittedBase, expected)
-    const molecule = round.type === 'transcription' ? 'mRNA' : 'DNA'
-
+    const index = Math.max(0, findFirstMismatch(submitted, round.answer))
+    const expected = round.answer[index]
+    const submittedBase = submitted[index] ?? 'blank'
     return {
+      category: round.type === 'transcription' && (submittedBase === 'T' || expected === 'U') ? 'rna-uses-u' : round.type === 'dna' ? 'dna-base-pairing' : 'rna-template-pairing',
+      expected,
+      index,
       kind: 'base',
-      index: repairIndex,
-      expected,
+      label: `position ${index + 1}: ${round.template[index]} pairs with ${expected}`,
       submitted: submittedBase,
-      category,
-      label: `Fix position ${repairIndex + 1}: template ${templateBase} pairs with ${expected} in ${molecule}, not ${submittedBase}.`,
     }
   }
-
   if (round.type === 'translation') {
-    const mismatch = round.answers.findIndex((answer, index) => state.answers[index] && state.answers[index] !== answer)
-    const missing = round.answers.findIndex((_, index) => !state.answers[index])
-    const repairIndex = mismatch !== -1 ? mismatch : Math.max(0, missing)
-    const expected = round.answers[repairIndex] ?? ''
-    const submittedAnswer = state.answers[repairIndex] || 'blank'
-
+    const mismatch = round.answers.findIndex((answer, index) => state.answers[index] !== answer)
+    const index = Math.max(0, mismatch)
     return {
+      category: state.answers[index] ? 'codon-lookup' : 'codon-grouping',
+      expected: round.answers[index],
+      index,
       kind: 'codon',
-      index: repairIndex,
-      expected,
-      submitted: submittedAnswer,
-      category: missing !== -1 && mismatch === -1 ? 'codon-grouping' : 'codon-lookup',
-      label: `Fix codon ${repairIndex + 1}: ${round.codons[repairIndex]} codes for ${expected}, not ${submittedAnswer}.`,
+      label: `codon ${index + 1}: ${round.codons[index]} codes for ${round.answers[index]}`,
+      submitted: state.answers[index] || 'blank',
     }
   }
-
   if (round.type === 'protein') {
     return {
-      kind: 'protein',
-      index: 0,
-      expected: round.correctTrait,
-      submitted: state.selectedTrait || submitted || 'blank',
       category: 'protein-trait-model',
-      label: `Fix the model match: the short ${round.chain} clue matches ${round.correctTrait}.`,
+      expected: round.correctTrait,
+      index: 0,
+      kind: 'protein',
+      label: 'compare the normal and variant chains before predicting pigment output',
+      submitted: state.selectedTrait || 'blank',
     }
   }
-
   return null
 }
 
-function getBaseCategory(round: Extract<GameRound, { type: 'dna' | 'transcription' }>, submitted: string, expected: string): MisconceptionCategory {
-  if (round.type === 'transcription') {
-    return submitted === 'T' || expected === 'U' ? 'rna-uses-u' : 'rna-template-pairing'
-  }
-
-  return 'dna-base-pairing'
+function getNarrowedChoices(round: GameRound, target: RepairTarget | null): string[] {
+  if (!target) return []
+  if (isBaseRound(round)) return [target.expected, ...round.options.filter((item) => item !== target.expected).slice(0, 1)]
+  if (round.type === 'translation') return [target.expected, ...round.codonChoices[target.index].filter((item) => item !== target.expected).slice(0, 1)]
+  return 'correctTrait' in round
+    ? [target.expected, ...round.options.map((item) => item.trait).filter((item) => item !== target.expected).slice(0, 1)]
+    : [target.expected]
 }
 
-function getFallbackCategory(round: GameRound): MisconceptionCategory {
+function diagnosticRule(round: GameRound, target: RepairTarget | null): string {
+  if (round.type === 'dna') return `Use A-T and C-G pairing at ${target?.label ?? 'the highlighted position'}.`
+  if (round.type === 'transcription') return `Pair RNA to template DNA and use U, not T, at ${target?.label ?? 'the highlighted position'}.`
+  if (round.type === 'translation') return `Read one complete mRNA codon at ${target?.label ?? 'the highlighted codon'}.`
+  return 'Use the chain length and changed amino acid to predict enzyme activity and pigment output.'
+}
+
+function buildErrorFeedback(round: GameRound, state: RoundState, mistakeNumber: number): Feedback {
+  const target = state.repairTarget
+  return {
+    detail: mistakeNumber >= 2 && state.narrowedChoices.length > 0 ? `Choices narrowed to ${state.narrowedChoices.join(' or ')}.` : undefined,
+    kind: 'error',
+    message: diagnosticRule(round, target),
+    title: mistakeNumber >= 2 ? 'Recalibrate the highlighted part.' : 'Inspect the highlighted mismatch.',
+  }
+}
+
+function shipmentMessage(round: GameRound): string {
+  if (round.type === 'dna') return 'The complementary DNA tray is moving to transcription.'
+  if (round.type === 'transcription') return 'The exact mRNA strip is moving to the ribosome line.'
+  if (round.type === 'translation') return 'The translated chain is moving to the function chamber.'
+  return 'correctTrait' in round ? round.correctTrait : 'Protein function test complete.'
+}
+
+function buildStationPrompt(round: GameRound): Feedback {
+  return { kind: 'info', message: 'Tap the highlighted station to load the current order.', title: stationLabel(stationIdForRoundType(round.type)) }
+}
+
+function fallbackCategory(round: GameRound): MisconceptionCategory {
   if (round.type === 'dna') return 'dna-base-pairing'
   if (round.type === 'transcription') return 'rna-template-pairing'
   if (round.type === 'translation') return 'codon-lookup'
   return 'protein-trait-model'
 }
 
-function getNextFullTranslationIndex(answers: string[], selectedIndex: number, length: number): number {
-  const nextMissing = answers.findIndex((answer, index) => index > selectedIndex && !answer)
-  if (nextMissing !== -1) {
-    return nextMissing
-  }
+function buildReplayChallenge(state: GameSessionState): ReplayChallenge {
+  const target = state.roundResults.find((result) => !result.independent)
+  return target
+    ? { baselineMistakes: target.mistakes, label: `Clear ${target.title} independently with a new order.`, roundId: target.id, roundTitle: target.title, type: target.hintUsed ? 'no-hint-round' : 'repair-round' }
+    : { baselineMistakes: 0, label: 'Complete another precise production run.', type: 'perfect-run' }
+}
 
-  const firstMissing = answers.findIndex((answer) => !answer)
-  if (firstMissing !== -1) {
-    return firstMissing
-  }
-
-  return Math.min(selectedIndex, length - 1)
+function findFirstMismatch(submitted: string, expected: string): number {
+  return [...expected].findIndex((base, index) => submitted[index] !== base)
 }
 
 function replaceAt(input: string, index: number, value: string): string {
@@ -867,37 +566,7 @@ function replaceAt(input: string, index: number, value: string): string {
 
 function createAttemptId(now: number): string {
   const uuid = globalThis.crypto?.randomUUID?.()
-  return uuid ? `ppf-${uuid}` : `ppf-${now}-${Math.random().toString(36).slice(2, 8)}`
-}
-
-function buildReplayChallenge(state: GameSessionState): ReplayChallenge {
-  const hintedRound = state.roundResults.find((result) => result.hintUsed)
-  if (hintedRound) {
-    return {
-      type: 'no-hint-round',
-      roundId: hintedRound.id,
-      roundTitle: hintedRound.title,
-      baselineMistakes: hintedRound.mistakes,
-      label: `Replay challenge: clear ${hintedRound.title} without a hint.`,
-    }
-  }
-
-  const repairedRound = state.roundResults.find((result) => result.mistakes > 0)
-  if (repairedRound) {
-    return {
-      type: 'repair-round',
-      roundId: repairedRound.id,
-      roundTitle: repairedRound.title,
-      baselineMistakes: repairedRound.mistakes,
-      label: `Replay challenge: fewer repairs on ${repairedRound.title}.`,
-    }
-  }
-
-  return {
-    type: 'perfect-run',
-    baselineMistakes: 0,
-    label: 'Replay challenge: finish a perfect run again.',
-  }
+  return uuid ? `pf-${uuid}` : `pf-${now}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function isBaseRound(round: GameRound): round is Extract<GameRound, { type: 'dna' | 'transcription' }> {
@@ -905,14 +574,8 @@ function isBaseRound(round: GameRound): round is Extract<GameRound, { type: 'dna
 }
 
 function stationLabel(stationId: StationId): string {
-  switch (stationId) {
-    case 'dna-dock':
-      return 'DNA Dock'
-    case 'transcription-press':
-      return 'Transcription Press'
-    case 'ribosome-galley':
-      return 'Ribosome Galley'
-    case 'trait-vault':
-      return 'Trait Vault'
-  }
+  if (stationId === 'dna-dock') return 'DNA Assembly Bench'
+  if (stationId === 'transcription-press') return 'Transcription Press'
+  if (stationId === 'ribosome-galley') return 'Ribosome Line'
+  return 'Function Test Chamber'
 }

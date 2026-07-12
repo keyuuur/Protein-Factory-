@@ -26,7 +26,7 @@ export function RoundIntro({ round, roundNumber, totalRounds, onBegin }: RoundIn
         <p>{round.prompt}</p>
         <button className="primary-action" onClick={onBegin} type="button">
           <ArrowRight aria-hidden="true" size={22} />
-          Enter factory
+          Enter cell lab
         </button>
       </section>
     </main>

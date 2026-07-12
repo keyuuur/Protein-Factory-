@@ -1,12 +1,24 @@
 export type RoundType = 'dna' | 'transcription' | 'translation' | 'protein'
 
-export type Screen = 'start' | 'tutorial' | 'intro' | 'playing' | 'success' | 'end'
+export type Screen = 'start' | 'tutorial' | 'intro' | 'playing' | 'success' | 'transfer' | 'end'
 
 export type StationId = 'dna-dock' | 'transcription-press' | 'ribosome-galley' | 'trait-vault'
 
 export type FeedbackKind = 'success' | 'error' | 'info'
 
 export type SaveStatus = 'local-draft' | 'saved-local' | 'failed-local'
+
+export type SupportMode = 'standard' | 'guided'
+
+export type ReplayMode = 'full' | 'targeted'
+
+export type ProductionStage = 'dna-assembly' | 'transcription' | 'translation' | 'function-test'
+
+export type MutationEffect = 'no-change' | 'amino-acid-change' | 'early-stop'
+
+export type OrderRole = 'normal' | 'one-base-variant'
+
+export type ProductionRating = 'Precision' | 'Stable' | 'Supported' | 'Recalibration'
 
 export type MisconceptionCategory =
   | 'dna-base-pairing'
@@ -18,6 +30,40 @@ export type MisconceptionCategory =
   | 'incomplete'
   | 'hint-support'
 
+export interface ProductionSequence {
+  codingDna: string
+  templateDna: string
+  mrna: string
+  mrnaCodons: [string, string, string, string]
+  translatedSlots: [string, string, string, string]
+  proteinChain: string[]
+  functionOutcome: string
+}
+
+export interface ProteinOrder {
+  id: string
+  name: string
+  role: OrderRole
+  sequence: ProductionSequence
+}
+
+export interface ProteinOrderPair {
+  id: string
+  effect: MutationEffect
+  changedMrnaIndex: number
+  normal: ProteinOrder
+  variant: ProteinOrder
+}
+
+export interface StageContext {
+  stage: ProductionStage
+  pairId: string
+  orderId: string
+  orderRole: OrderRole
+  effect: MutationEffect
+  sequence: ProductionSequence
+}
+
 export interface RepairTarget {
   kind: 'base' | 'codon' | 'protein'
   index: number
@@ -25,6 +71,16 @@ export interface RepairTarget {
   submitted: string
   category: MisconceptionCategory
   label: string
+}
+
+export interface SupportEvent {
+  kind: 'error-location-rule' | 'narrowed-choices' | 'explicit-hint' | 'codon-chart'
+  attempt: number
+  stage: ProductionStage
+  location: string
+  rule: string
+  choices: string[]
+  affectsIndependence: boolean
 }
 
 export interface ReplayChallenge {
@@ -45,6 +101,7 @@ export interface BaseRound {
   answer: string
   options: string[]
   hint: string
+  context: StageContext
 }
 
 export interface TranslationRound {
@@ -58,6 +115,7 @@ export interface TranslationRound {
   mode: 'perCodon' | 'full'
   codonChoices: string[][]
   hint: string
+  context: StageContext
 }
 
 export interface ProteinRound {
@@ -70,6 +128,7 @@ export interface ProteinRound {
   options: ProteinOption[]
   correctTrait: string
   hint: string
+  context: StageContext
 }
 
 export interface ProteinOption {
@@ -79,6 +138,16 @@ export interface ProteinOption {
 }
 
 export type GameRound = BaseRound | TranslationRound | ProteinRound
+
+export interface RunManifest {
+  schemaVersion: 'protein-factory-v3'
+  seed: string
+  selectionIndex: number
+  pairId: string
+  effect: MutationEffect
+  orderIds: [string, string]
+  rounds: GameRound[]
+}
 
 export interface RoundState {
   input: string
@@ -91,9 +160,11 @@ export interface RoundState {
   selectedProtein: string
   selectedTrait: string
   repairTarget: RepairTarget | null
+  supportEvents: SupportEvent[]
+  narrowedChoices: string[]
 }
 
-export interface RoundResult {
+export interface StageResult {
   round: number
   id: string
   type: RoundType
@@ -111,7 +182,19 @@ export interface RoundResult {
   selectedTrait?: string
   expectedProtein?: string
   expectedTrait?: string
+  stage: ProductionStage
+  pairId: string
+  orderId: string
+  orderRole: OrderRole
+  effect: MutationEffect
+  independent: boolean
+  repairs: number
+  supportLevel: 0 | 1 | 2 | 3
+  supportEvents: SupportEvent[]
+  sequence: ProductionSequence
 }
+
+export type RoundResult = StageResult
 
 export interface Feedback {
   kind: FeedbackKind
@@ -141,10 +224,36 @@ export interface MissedSkill {
   category: MisconceptionCategory
 }
 
+export interface TransferTask {
+  id: string
+  sourcePairId: string
+  targetStage: ProductionStage
+  targetCategory: MisconceptionCategory
+  prompt: string
+  expected: string
+  options: string[]
+}
+
+export interface TransferResult {
+  taskId: string
+  sourcePairId: string
+  targetStage: ProductionStage
+  targetCategory: MisconceptionCategory
+  submitted: string
+  expected: string
+  recovered: boolean
+}
+
 export interface StudentIdentity {
   firstName: string
   isDemo: boolean
   period: string
+}
+
+export interface TeacherSettings {
+  supportMode: SupportMode
+  soundEnabled: boolean
+  replayMode: ReplayMode
 }
 
 export interface GameSessionState {
@@ -164,6 +273,12 @@ export interface GameSessionState {
   selectedStationId: StationId | null
   saveStatus: SaveStatus
   replayChallenge: ReplayChallenge | null
+  runManifest: RunManifest
+  transferTasks: TransferTask[]
+  transferResults: TransferResult[]
+  recoveredConcepts: MisconceptionCategory[]
+  currentTransferIndex: number
+  settings: TeacherSettings
 }
 
 export interface FinalGamePayload {
@@ -184,7 +299,10 @@ export interface FinalGamePayload {
   mistakes: number
   cleanRounds: number
   supportedRounds: number
-  factoryRating: string
+  factoryRating: ProductionRating
+  productionRating: ProductionRating
+  independentStages: number
+  repairs: number
   replayGoal: string
   activeReplayChallenge: string
   replayChallengeMet: boolean
@@ -195,6 +313,10 @@ export interface FinalGamePayload {
   submitType: 'Final Submit'
   roundResults: RoundResult[]
   missedSkills: MissedSkill[]
+  runManifest: RunManifest
+  stageResults: StageResult[]
+  transferResults: TransferResult[]
+  recoveredConcepts: MisconceptionCategory[]
 }
 
 export interface AppsScriptAttemptPayload {
