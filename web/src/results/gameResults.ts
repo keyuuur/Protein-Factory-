@@ -1,10 +1,12 @@
 import { gameName, gameVersion } from '../game/content/rounds'
 import type {
   FinalGamePayload,
+  FunctionReferenceRow,
   GameRound,
   GameSessionState,
   MissedSkill,
   MisconceptionCategory,
+  ProductionAction,
   ProductionRating,
   ProteinRound,
   ReplayChallenge,
@@ -13,13 +15,13 @@ import type {
 } from '../types'
 
 export function getExpectedAnswer(round: GameRound): string {
-  if (round.type === 'dna' || round.type === 'transcription') return round.answer
+  if (round.type === 'transcription') return round.answer
   if (round.type === 'translation') return round.answers.join('-')
-  return 'correctTrait' in round ? round.correctTrait : ''
+  return round.correctRowId
 }
 
-export function getCorrectProtein(round: ProteinRound): string {
-  return round.options.find((option) => option.trait === round.correctTrait)?.protein ?? ''
+export function getCorrectFunctionRow(round: ProteinRound): FunctionReferenceRow | undefined {
+  return round.referenceRows.find((row) => row.id === round.correctRowId)
 }
 
 export function getRoundResult(
@@ -28,34 +30,34 @@ export function getRoundResult(
   state: RoundState,
   submitted: string,
   correct: boolean,
-  selectedProtein = '',
-  selectedTrait = '',
 ): RoundResult {
   const independenceAffectingSupport = state.supportEvents.filter((event) => event.affectsIndependence)
-  const supportLevel = Math.min(3, Math.max(state.hintUsed ? 3 : 0, state.mistakes >= 2 ? 2 : state.mistakes)) as 0 | 1 | 2 | 3
+  const supportLevel = Math.min(
+    3,
+    Math.max(state.hintUsed ? 3 : 0, state.mistakes >= 2 ? 2 : state.mistakes),
+  ) as 0 | 1 | 2 | 3
   return {
     attempts: state.attempts,
-    chain: round.type === 'protein' ? round.chain : round.type === 'translation' ? round.context.sequence.proteinChain.join('-') : '',
+    chain: round.type === 'transcription' ? undefined : round.context.sequence.aminoAcidChain.join('-'),
     correct,
-    effect: round.context.effect,
     expected: getExpectedAnswer(round),
-    expectedProtein: round.type === 'protein' ? getCorrectProtein(round) : '',
-    expectedTrait: round.type === 'protein' ? round.correctTrait : '',
+    expectedFunctionRowId: round.type === 'protein' ? round.correctRowId : undefined,
+    familyId: round.context.familyId,
     firstTryCorrect: correct && state.mistakes === 0 && !state.hintUsed,
     hintUsed: state.hintUsed,
     id: round.id,
     independent: correct && state.mistakes === 0 && independenceAffectingSupport.length === 0,
     mistakes: state.mistakes,
-    orderId: round.context.orderId,
-    orderRole: round.context.orderRole,
-    pairId: round.context.pairId,
     prompt: round.prompt,
     repairs: state.mistakes,
     round: roundIndex + 1,
-    selectedProtein,
-    selectedTrait,
+    selectedFunctionRowId: round.type === 'protein' ? state.selectedFunctionRowId : undefined,
     sequence: round.context.sequence,
-    stage: round.context.stage,
+    sequenceEffect: round.context.sequenceEffect,
+    sequenceId: round.context.sequenceId,
+    sequenceIndex: round.context.sequenceIndex,
+    sequenceRole: round.context.sequenceRole,
+    stage: round.context.action,
     submitted,
     supportEvents: state.supportEvents,
     supportLevel,
@@ -109,7 +111,14 @@ export function summarizeMissedSkills(state: GameSessionState): MissedSkill[] {
     if (!result?.correct) {
       misses.push(createMissedSkill(round, index, createEmptyEvidence(), result?.submitted ?? '', 'incomplete', 'incomplete'))
     } else if (result.hintUsed) {
-      misses.push(createMissedSkill(round, index, { ...createEmptyEvidence(), attempts: result.attempts }, result.submitted, 'hint', 'hint-support'))
+      misses.push(createMissedSkill(
+        round,
+        index,
+        { ...createEmptyEvidence(), attempts: result.attempts },
+        result.submitted,
+        'hint',
+        'hint-support',
+      ))
     }
   })
   const seen = new Set<string>()
@@ -131,9 +140,11 @@ export function formatMissedRound(round: GameRound, result: RoundResult | undefi
 }
 
 export function buildFinalPayload(state: GameSessionState): FinalGamePayload {
-  const total = state.runManifest.rounds.length
+  const total = 9 as const
   const score = selectScore(state.roundResults)
   const independentStages = state.roundResults.filter((result) => result.independent).length
+  const completionPercent = getCompletionPercent(score, total)
+  const independencePercent = getCompletionPercent(independentStages, total)
   const repairs = state.roundResults.reduce((sum, result) => sum + result.repairs, 0)
   const supportedRounds = state.roundResults.filter((result) => result.correct && !result.independent).length
   const completedAt = state.completedAt ?? Date.now()
@@ -142,30 +153,35 @@ export function buildFinalPayload(state: GameSessionState): FinalGamePayload {
   return {
     activeReplayChallenge: state.replayChallenge?.label ?? '',
     attemptId: state.attemptId,
+    attemptKind: state.attemptKind,
     attempts: state.roundResults.reduce((sum, result) => sum + result.attempts, 0),
     classPeriod: state.identity.period,
     cleanRounds: independentStages,
+    completedProducts: state.completedProducts,
+    completionPercent,
     completionStatus: score === total ? 'Completed' : 'Incomplete',
     currentRound: Math.min(state.currentRoundIndex + 1, total),
     factoryRating: productionRating,
     game: gameName,
     gameVersion,
     independentStages,
+    independencePercent,
     isDemo: state.identity.isDemo,
     maxScore: total,
     missedSkills,
     mistakes: repairs,
-    percent: getCompletionPercent(score, total),
+    parentAttemptId: state.parentAttemptId,
+    percent: completionPercent,
     productionRating,
     recoveredConcepts: state.recoveredConcepts,
     repairs,
-    replayChallengeMet: isReplayChallengeMet(state.replayChallenge, state.roundResults),
+    replayChallengeMet: state.transferResults.some((result) => result.recovered) || isReplayChallengeMet(state.replayChallenge, state.roundResults),
     replayGoal: getReplayGoal(productionRating, missedSkills),
     reviewSummary: buildReviewSummary(missedSkills, state.recoveredConcepts),
     roundResults: state.roundResults,
     roundsCompleted: score,
     runManifest: state.runManifest,
-    schemaVersion: 'protein-factory-attempt-v3',
+    schemaVersion: 'protein-factory-v4',
     score,
     stageResults: state.roundResults,
     studentName: state.identity.firstName,
@@ -179,29 +195,47 @@ export function buildFinalPayload(state: GameSessionState): FinalGamePayload {
 }
 
 export function buildTeacherSummary(payload: FinalGamePayload): string {
+  if (payload.attemptKind === 'targeted-practice') {
+    const result = payload.transferResults[0]
+    return [
+      `${payload.studentName} | Period ${payload.classPeriod}`,
+      'Targeted practice (new evidence; the original factory run was not repeated)',
+      `New skill: ${result?.skillLabel ?? 'Targeted skill unavailable'}`,
+      `New evidence: ${result?.evidence ?? 'No targeted-practice evidence recorded'}`,
+      `Result: ${result?.outcome === 'recovered' ? 'Recovered' : 'Not yet recovered'}`,
+      `Practice attempts: ${result?.attempts ?? 0}/2`,
+      `Baseline only - original 9-stage run: ${payload.score}/9 complete; ${payload.independentStages}/9 independent; ${payload.repairs} repairs`,
+      `Baseline products preserved: ${payload.completedProducts.length}/3`,
+      `Targeted attempt: ${payload.attemptId}`,
+      `Original attempt: ${payload.parentAttemptId ?? 'Unavailable'}`,
+    ].join('\n')
+  }
+
   return [
     `${payload.studentName} | Period ${payload.classPeriod}`,
     `${payload.game}: ${payload.productionRating} Production`,
-    `${payload.independentStages}/${payload.totalRounds} independent stages; ${payload.repairs} repairs`,
-    `Variant effect: ${payload.runManifest.effect}`,
-    `Transfer recovery: ${payload.transferResults.filter((result) => result.recovered).length}/${payload.transferResults.length}`,
+    `${payload.completionPercent}% complete; ${payload.independencePercent}% independent; ${payload.repairs} repairs`,
+    'Outcomes use the fictional fur-color practice model; they are modeled results, not real fur-color mechanisms.',
+    `Sequence effects: ${payload.runManifest.effects.join(' and ')}`,
+    `Products completed: ${payload.completedProducts.length}/3`,
     `Review: ${payload.reviewSummary.join('; ') || 'No review targets recorded.'}`,
     `Attempt: ${payload.attemptId}`,
+    ...(payload.parentAttemptId ? [`Practice linked to: ${payload.parentAttemptId}`] : []),
   ].join('\n')
 }
 
 function getProductionRating(complete: boolean, independent: number, repairs: number): ProductionRating {
-  if (!complete || independent < 4) return 'Recalibration'
-  if (independent === 8) return 'Precision'
-  if (independent >= 6 && repairs <= 2) return 'Stable'
+  if (!complete || independent < 5) return 'Recalibration'
+  if (independent === 9) return 'Precision'
+  if (independent >= 7 && repairs <= 2) return 'Stable'
   return 'Supported'
 }
 
 function getReplayGoal(rating: ProductionRating, misses: MissedSkill[]): string {
   const target = misses.find((item) => item.reason !== 'incomplete')
-  if (rating === 'Precision') return 'Run a new one-base variant and keep all eight stages independent.'
-  if (target) return `Use a new order to clear ${target.title} without support.`
-  return 'Complete all eight production stages with fewer repairs.'
+  if (rating === 'Precision') return 'Run a different sequence family and keep all nine actions independent.'
+  if (target) return `Use a different family to clear ${target.title} without support.`
+  return 'Complete all nine production actions with fewer repairs.'
 }
 
 function buildReviewSummary(misses: MissedSkill[], recovered: MisconceptionCategory[]): string[] {
@@ -212,28 +246,46 @@ function buildReviewSummary(misses: MissedSkill[], recovered: MisconceptionCateg
 function formatCategory(category: MisconceptionCategory): string {
   const labels: Record<MisconceptionCategory, string> = {
     'codon-grouping': 'Codon grouping',
-    'codon-lookup': 'Codon chart use',
-    'dna-base-pairing': 'DNA base pairing',
+    'codon-lookup': 'Codon wheel use',
     'hint-support': 'Explicit hint use',
     incomplete: 'Incomplete production',
     'protein-trait-model': 'Protein function model',
-    'rna-template-pairing': 'mRNA template pairing',
+    'rna-template-pairing': 'DNA-to-mRNA pairing',
     'rna-uses-u': 'RNA uses U instead of T',
+    'stop-signal': 'Stop signal',
   }
   return labels[category]
 }
 
 function isReplayChallengeMet(challenge: ReplayChallenge | null, results: RoundResult[]): boolean {
   if (!challenge) return false
-  if (challenge.type === 'perfect-run') return results.length === 8 && results.every((result) => result.independent)
-  const comparable = results.find((result) => result.stage === results.find((item) => item.id === challenge.roundId)?.stage)
+  if (challenge.type === 'perfect-run') return results.length === 9 && results.every((result) => result.independent)
+  const stage = stageFromRoundId(challenge.roundId)
+  const comparable = stage ? results.find((result) => result.stage === stage) : undefined
   if (!comparable) return false
   return challenge.type === 'no-hint-round' ? !comparable.hintUsed : comparable.mistakes < challenge.baselineMistakes
 }
 
+function stageFromRoundId(roundId: string | undefined): ProductionAction | undefined {
+  if (roundId?.endsWith('-transcription')) return 'transcription'
+  if (roundId?.endsWith('-translation')) return 'translation'
+  if (roundId?.endsWith('-function')) return 'function-test'
+  return undefined
+}
+
 function createEmptyEvidence(): RoundState {
   return {
-    answers: [], attempts: 0, currentCodonIndex: 0, hintUsed: false, input: '', mistakes: 0,
-    narrowedChoices: [], repairTarget: null, selectedProtein: '', selectedTrait: '', showHint: false, supportEvents: [],
+    answers: [],
+    attempts: 0,
+    currentCodonIndex: 0,
+    hintUsed: false,
+    input: '',
+    mistakes: 0,
+    narrowedChoices: [],
+    pendingTranslationChoice: '',
+    repairTarget: null,
+    selectedFunctionRowId: '',
+    showHint: false,
+    supportEvents: [],
   }
 }

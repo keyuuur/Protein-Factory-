@@ -1,14 +1,12 @@
 import type {
   AppsScriptAttemptPayload,
   FinalGamePayload,
-  MissedSkill,
-  MutationEffect,
   ProductionRating,
-  StageResult,
-  TransferResult,
+  ProteinFactoryAttemptV4,
 } from '../types'
 
-export const proteinFactoryAttemptSchemaVersion = 'protein-factory-attempt-v3' as const
+export const legacyProteinFactoryAttemptSchemaVersion = 'protein-factory-attempt-v3' as const
+export const proteinFactoryAttemptSchemaVersion = 'protein-factory-v4' as const
 
 export interface ProteinFactoryAttemptV3 {
   attemptId: string
@@ -18,51 +16,51 @@ export interface ProteinFactoryAttemptV3 {
   independentCount: number
   isDemo: boolean
   maxScore: number
-  misconceptions: MissedSkill[]
+  misconceptions: Array<Record<string, unknown>>
   orderPair: {
     orderIds: [string, string]
     pairId: string
   }
   productionRating: ProductionRating
   repairs: number
-  schemaVersion: typeof proteinFactoryAttemptSchemaVersion
+  schemaVersion: typeof legacyProteinFactoryAttemptSchemaVersion
   score: number
   seed: string | number
-  stageResults: StageResult[]
+  stageResults: Array<Record<string, unknown>>
   studentName: string
   submittedAt: string
   supportCount: number
-  transferResults: TransferResult[]
-  variantEffect: MutationEffect
+  transferResults: Array<Record<string, unknown>>
+  variantEffect: 'no-change' | 'amino-acid-change' | 'early-stop'
 }
 
-export function toProteinFactoryAttemptV3(payload: FinalGamePayload): ProteinFactoryAttemptV3 {
+export type ProteinFactorySubmissionAttempt = ProteinFactoryAttemptV3 | ProteinFactoryAttemptV4
+
+export function toProteinFactoryAttemptV4(payload: FinalGamePayload): ProteinFactoryAttemptV4 {
+  const independentStages = Number(payload.independentStages) || 0
+  const completionPercent = payload.completionPercent ?? payload.percent
+  const independencePercent = payload.independencePercent ?? Math.round((independentStages / 9) * 1000) / 10
   return {
-    attemptId: payload.attemptId,
-    classPeriod: payload.classPeriod,
-    contentVersion: payload.gameVersion,
-    durationSeconds: payload.timeSpent,
-    independentCount: payload.independentStages,
-    isDemo: payload.isDemo,
-    maxScore: payload.maxScore,
-    misconceptions: payload.missedSkills,
-    orderPair: {
-      orderIds: payload.runManifest.orderIds,
-      pairId: payload.runManifest.pairId,
+    ...payload,
+    attemptKind: payload.attemptKind ?? 'full-run',
+    completedProducts: [...payload.completedProducts],
+    completionPercent,
+    independencePercent,
+    parentAttemptId: payload.parentAttemptId ?? null,
+    roundResults: [...payload.roundResults],
+    runManifest: {
+      ...payload.runManifest,
+      effects: [...payload.runManifest.effects],
+      rounds: [...payload.runManifest.rounds],
+      sequenceIds: [...payload.runManifest.sequenceIds],
     },
-    productionRating: payload.productionRating,
-    repairs: payload.repairs,
-    schemaVersion: proteinFactoryAttemptSchemaVersion,
-    score: payload.score,
-    seed: payload.runManifest.seed,
-    stageResults: payload.stageResults,
-    studentName: payload.studentName,
-    submittedAt: payload.timestamp,
-    supportCount: payload.supportedRounds,
-    transferResults: payload.transferResults,
-    variantEffect: payload.runManifest.effect,
+    stageResults: [...payload.stageResults],
+    transferResults: [...payload.transferResults],
   }
 }
+
+// Temporary source-compatibility for App.tsx while its V4 integration lands.
+export const toProteinFactoryAttemptV3 = toProteinFactoryAttemptV4
 
 // Kept for the legacy Apps Script UI, which still calls saveAttempt directly.
 export function toAppsScriptAttemptPayload(
@@ -91,9 +89,15 @@ export function toAppsScriptAttemptPayload(
       attempts: result.attempts,
       mistakes: result.mistakes,
       hintUsed: result.hintUsed,
+      familyId: result.familyId,
+      sequenceId: result.sequenceId,
+      sequenceEffect: result.sequenceEffect,
     })),
     roundResults: payload.roundResults,
     userAgent,
     schemaVersion: payload.schemaVersion,
+    familyId: payload.runManifest.familyId,
+    sequenceIds: [...payload.runManifest.sequenceIds],
+    completedProducts: [...payload.completedProducts],
   }
 }

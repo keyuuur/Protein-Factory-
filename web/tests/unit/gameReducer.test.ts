@@ -1,166 +1,414 @@
 import { describe, expect, it } from 'vitest'
-import { buildRunManifest, proteinOrderPairs, validateContent } from '../../src/game/content/rounds'
-import { createInitialGameState, gameReducer } from '../../src/game/simulation/gameReducer'
-import { buildFinalPayload, selectScore } from '../../src/results/gameResults'
-import { toAppsScriptAttemptPayload, toProteinFactoryAttemptV3 } from '../../src/results/appsScriptMapper'
-import type { GameRound, GameSessionState, TeacherSettings } from '../../src/types'
+import { createInitialGameState, formatChain, gameReducer } from '../../src/game/simulation/gameReducer'
+import { buildFinalPayload, buildTeacherSummary, selectScore } from '../../src/results/gameResults'
+import type { GameSessionState, RoundResult, TeacherSettings } from '../../src/types'
 
 const settings: TeacherSettings = { replayMode: 'full', soundEnabled: false, supportMode: 'standard' }
 
-describe('seeded Protein Factory content', () => {
-  it('validates all six order pairs and all three one-base outcomes', () => {
-    expect(validateContent()).toEqual([])
-    expect(proteinOrderPairs).toHaveLength(6)
-    expect(new Set(proteinOrderPairs.map((pair) => pair.effect))).toEqual(new Set(['no-change', 'amino-acid-change', 'early-stop']))
+describe('gameReducer V4 production flow', () => {
+  it('completes all nine actions with a transition and product snapshot after each sequence', () => {
+    let state = startRun('Kai')
+    const expectedStages = [
+      'transcription', 'translation', 'function-test',
+      'transcription', 'translation', 'function-test',
+      'transcription', 'translation', 'function-test',
+    ]
+
+    state.runManifest.rounds.forEach((round, index) => {
+      expect(round.context.action).toBe(expectedStages[index])
+      expect(round.context.sequenceIndex).toBe(Math.floor(index / 3))
+      state = completeCurrentAction(state)
+      expect(state.roundResults).toHaveLength(index + 1)
+      expect(state.feedback?.kind).toBe('success')
+      if ((index + 1) % 3 === 0) {
+        expect(state.screen).toBe('sequence-transition')
+        expect(state.completedProducts).toHaveLength((index + 1) / 3)
+      } else {
+        expect(state.screen).toBe('playing')
+      }
+      state = gameReducer(state, { type: 'CONTINUE_AFTER_SUCCESS', now: 2_000 + index * 1_000 })
+    })
+
+    expect(state.screen).toBe('end')
+    expect(selectScore(state.roundResults)).toBe(9)
+    expect(state.roundResults.map((result) => result.stage)).toEqual(expectedStages)
+    expect(state.roundResults.every((result) => result.independent)).toBe(true)
+    expect(state.completedProducts).toHaveLength(3)
+
+    const payload = buildFinalPayload(state)
+    expect(payload.schemaVersion).toBe('protein-factory-v4')
+    expect(payload.score).toBe(9)
+    expect(payload.maxScore).toBe(9)
+    expect(payload.totalRounds).toBe(9)
+    expect(payload.percent).toBe(100)
+    expect(payload.completionPercent).toBe(100)
+    expect(payload.independencePercent).toBe(100)
+    expect(payload.productionRating).toBe('Precision')
+    expect(payload.completedProducts).toEqual(state.completedProducts)
   })
 
-  it('selects the same pair for the same seed and a different pair when excluded', () => {
-    const first = buildRunManifest('classroom-seed')
-    expect(buildRunManifest('classroom-seed').pairId).toBe(first.pairId)
-    expect(buildRunManifest('classroom-seed', [first.pairId]).pairId).not.toBe(first.pairId)
+  it('commits translation select-then-check and treats terminal Stop as a signal, not a chain slot', () => {
+    let state = startRun('Maya')
+    state = completeAndContinue(state)
+    const round = state.runManifest.rounds[state.currentRoundIndex]
+    expect(round.type).toBe('translation')
+    if (round.type !== 'translation') return
+
+    round.answers.forEach((answer, index) => {
+      const before = state.roundState.answers[index]
+      if (answer === 'Stop') {
+        const wrong = round.codonChoices[index].find((choice) => choice !== answer)!
+        state = gameReducer(state, { type: 'SELECT_TRANSLATION', index, value: wrong })
+        state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
+        expect(state.roundState.answers[index]).toBe('')
+        expect(state.roundState.repairTarget?.category).toBe('stop-signal')
+      }
+      state = gameReducer(state, { type: 'SELECT_TRANSLATION', index, value: answer })
+      expect(before).toBe('')
+      expect(state.roundState.answers[index]).toBe('')
+      expect(state.roundState.pendingTranslationChoice).toBe(answer)
+      state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
+      expect(state.roundState.answers[index]).toBe(answer)
+    })
+
+    expect(state.roundState.answers).toEqual(round.answers)
+    expect(formatChain(state.roundState)).toBe(round.answers.slice(0, 4).join('-'))
+    expect(formatChain(state.roundState)).not.toContain('Stop')
+    expect(state.roundResults[0].chain).toBeUndefined()
+    expect(state.roundResults[1].chain).toBe(round.context.sequence.aminoAcidChain.join('-'))
   })
-})
 
-describe('gameReducer production flow', () => {
-  it('requires identity and records progressive repair support', () => {
-    let state = createInitialGameState(1000)
-    state = gameReducer(state, { type: 'START_GAME', demoMode: false, firstName: '', period: '2', settings, now: 1000 })
-    expect(state.screen).toBe('start')
+  it('records progressive repairs for transcription and function-row checks', () => {
+    let state = startRun('Ada')
+    const transcription = state.runManifest.rounds[0]
+    expect(transcription.type).toBe('transcription')
+    if (transcription.type !== 'transcription') return
 
-    state = startRun('Ada')
-    const round = state.runManifest.rounds[0]
-    expect(round.type).toBe('dna')
-    if (round.type !== 'dna') return
-    const wrong = `${round.answer[0] === 'A' ? 'T' : 'A'}${round.answer.slice(1)}`
-    state = enterBases(state, wrong)
+    const wrongBase = transcription.options.find((base) => base !== transcription.answer[0])!
+    state = enterBases(state, `${wrongBase}${transcription.answer.slice(1)}`)
     state = gameReducer(state, { type: 'CHECK_BASE_ROUND' })
     expect(state.roundState.mistakes).toBe(1)
-    expect(state.roundState.repairTarget?.index).toBe(0)
+    expect(state.roundState.repairTarget).toMatchObject({ kind: 'base', index: 0, expected: transcription.answer[0] })
     expect(state.roundState.supportEvents[0].kind).toBe('error-location-rule')
-    expect(selectScore(state.roundResults)).toBe(0)
 
-    state = gameReducer(state, { type: 'APPEND_BASE', base: round.answer[0] })
+    state = gameReducer(state, { type: 'APPEND_BASE', base: transcription.answer[0] })
     state = gameReducer(state, { type: 'CHECK_BASE_ROUND' })
-    expect(state.screen).toBe('success')
-    expect(state.roundResults[0].independent).toBe(false)
-    expect(state.roundResults[0].repairs).toBe(1)
+    expect(state.roundResults[0]).toMatchObject({ independent: false, repairs: 1, supportLevel: 1 })
+
+    state = gameReducer(state, { type: 'CONTINUE_AFTER_SUCCESS', now: 3_000 })
+    state = completeAndContinue(state)
+    const functionRound = state.runManifest.rounds[state.currentRoundIndex]
+    expect(functionRound.type).toBe('protein')
+    if (functionRound.type !== 'protein') return
+    const wrongRowId = functionRound.referenceRows.find((row) => row.id !== functionRound.correctRowId)!.id
+
+    state = gameReducer(state, { type: 'SELECT_FUNCTION_ROW', rowId: wrongRowId })
+    state = gameReducer(state, { type: 'CHECK_FUNCTION_ROW' })
+    expect(state.roundState.repairTarget?.kind).toBe('function-row')
+    state = gameReducer(state, { type: 'SELECT_FUNCTION_ROW', rowId: wrongRowId })
+    state = gameReducer(state, { type: 'CHECK_FUNCTION_ROW' })
+    expect(state.roundState.mistakes).toBe(2)
+    expect(state.roundState.narrowedChoices).toContain(functionRound.correctRowId)
+    expect(state.roundState.supportEvents.map((event) => event.kind)).toEqual([
+      'error-location-rule',
+      'narrowed-choices',
+    ])
+
+    state = gameReducer(state, { type: 'SELECT_FUNCTION_ROW', rowId: functionRound.correctRowId })
+    state = gameReducer(state, { type: 'CHECK_FUNCTION_ROW' })
+    expect(state.screen).toBe('sequence-transition')
+    expect(state.roundResults[2]).toMatchObject({ independent: false, repairs: 2, supportLevel: 2 })
   })
 
-  it('treats the codon chart as a tool while explicit hints affect independence', () => {
-    let state = startRun('Maya')
-    state = { ...state, currentRoundIndex: 2, roundState: createRoundStateFor(state.runManifest.rounds[2]), taskDockOpen: true }
+  it('keeps the codon wheel independent while explicit hints count as support', () => {
+    let state = completeAndContinue(startRun('Nia'))
     state = gameReducer(state, { type: 'OPEN_CODON_WHEEL' })
-    expect(state.roundState.supportEvents[0].kind).toBe('codon-chart')
-    expect(state.roundState.supportEvents[0].affectsIndependence).toBe(false)
+    state = gameReducer(state, { type: 'OPEN_CODON_WHEEL' })
+    expect(state.roundState.supportEvents).toEqual([
+      expect.objectContaining({ kind: 'reference-wheel', affectsIndependence: false, action: 'translation' }),
+    ])
+
+    state = gameReducer(state, { type: 'TOGGLE_HINT' })
     state = gameReducer(state, { type: 'TOGGLE_HINT' })
     expect(state.roundState.hintUsed).toBe(true)
-    expect(state.roundState.supportEvents.some((event) => event.kind === 'explicit-hint')).toBe(true)
+    expect(state.roundState.supportEvents.filter((event) => event.kind === 'explicit-hint')).toHaveLength(1)
+    state = completeCurrentAction(state)
+    expect(state.roundResults[1]).toMatchObject({ hintUsed: true, independent: false, supportLevel: 3 })
   })
 
-  it('completes two connected orders and assigns Precision Production', () => {
-    const state = completeRun(startRun('Kai'))
-    const payload = buildFinalPayload(state)
-    expect(state.screen).toBe('end')
-    expect(payload.game).toBe('Protein Factory')
-    expect(payload.schemaVersion).toBe('protein-factory-attempt-v3')
-    expect(payload.score).toBe(8)
-    expect(payload.independentStages).toBe(8)
-    expect(payload.productionRating).toBe('Precision')
-    expect(payload.runManifest.rounds.slice(0, 4).every((round) => round.context.orderRole === 'normal')).toBe(true)
-    expect(payload.runManifest.rounds.slice(4).every((round) => round.context.orderRole === 'one-base-variant')).toBe(true)
-    expect(payload.stageResults).toHaveLength(8)
+  it('captures same-chain and changed-chain comparisons from completed products', () => {
+    const state = completeRun(startRun('Lena'))
+    const [original, sameChain, changedChain] = state.completedProducts
 
-    const v3 = toProteinFactoryAttemptV3(payload)
-    expect(v3.orderPair.pairId).toBe(payload.runManifest.pairId)
-    expect(v3.variantEffect).toBe(payload.runManifest.effect)
-    const legacy = toAppsScriptAttemptPayload(payload, 'unit-test')
-    expect(legacy.isFinalSubmit).toBe(true)
+    expect(original.sequenceRole).toBe('original')
+    expect(sameChain.sequenceRole).toBe('same-chain-variant')
+    expect(changedChain.sequenceRole).toBe('changed-chain-variant')
+    expect(countDifferences(original.dnaStrand, sameChain.dnaStrand)).toBe(1)
+    expect(sameChain.aminoAcidChain).toEqual(original.aminoAcidChain)
+    expect(sameChain.functionRowId).toBe(original.functionRowId)
+    expect(countDifferences(original.dnaStrand, changedChain.dnaStrand)).toBe(1)
+    expect(countArrayDifferences(original.aminoAcidChain, changedChain.aminoAcidChain)).toBe(1)
+    expect(changedChain.functionRowId).not.toBe(original.functionRowId)
   })
 
-  it('offers unseen transfer tasks after supported stages without rewriting the original result', () => {
-    let state = startRun('Nia')
+  it('uses nine-action thresholds for every production rating', () => {
+    const clean = completeRun(startRun('Iris'))
+    expect(buildFinalPayload(clean).productionRating).toBe('Precision')
+    expect(buildFinalPayload(withSupportedResults(clean, 2)).productionRating).toBe('Stable')
+    expect(buildFinalPayload(withSupportedResults(clean, 3)).productionRating).toBe('Supported')
+    expect(buildFinalPayload(withSupportedResults(clean, 5)).productionRating).toBe('Recalibration')
+
+    const incomplete = { ...clean, roundResults: clean.roundResults.slice(0, 8) }
+    expect(buildFinalPayload(incomplete).productionRating).toBe('Recalibration')
+
+    const supported = buildFinalPayload(withSupportedResults(clean, 3))
+    expect(supported.percent).toBe(100)
+    expect(supported.completionPercent).toBe(100)
+    expect(supported.independencePercent).toBeCloseTo(66.7)
+  })
+
+  it('keeps repair practice optional through targeted replay', () => {
+    let state = startRun('Omar')
     const first = state.runManifest.rounds[0]
-    if (first.type !== 'dna') return
-    state = enterBases(state, `${first.answer[0] === 'A' ? 'T' : 'A'}${first.answer.slice(1)}`)
+    expect(first.type).toBe('transcription')
+    if (first.type !== 'transcription') return
+    const wrongBase = first.options.find((base) => base !== first.answer[0])!
+    state = enterBases(state, `${wrongBase}${first.answer.slice(1)}`)
     state = gameReducer(state, { type: 'CHECK_BASE_ROUND' })
-    state = gameReducer(state, { type: 'CLEAR_INPUT' })
-    state = enterBases(state, first.answer)
+    state = gameReducer(state, { type: 'APPEND_BASE', base: first.answer[0] })
     state = gameReducer(state, { type: 'CHECK_BASE_ROUND' })
-    state = gameReducer(state, { type: 'CONTINUE_AFTER_SUCCESS', now: 2000 })
-    state = completeRemainingRun(state, 1)
+    state = gameReducer(state, { type: 'CONTINUE_AFTER_SUCCESS', now: 2_000 })
+    state = completeRemainingRun(state)
+
+    expect(state.screen).toBe('end')
+    expect(state.transferTasks).toEqual([])
+    expect(state.roundResults[0]).toMatchObject({ independent: false, repairs: 1 })
+
+    const supportedResult = state.roundResults[0]
+    const baselineAttemptId = state.attemptId
+    const playedFamilyId = state.runManifest.familyId
+    const baselineManifest = state.runManifest
+    const baselineRoundResults = state.roundResults
+    const baselineProducts = state.completedProducts
+    state = { ...state, settings: { ...state.settings, replayMode: 'targeted' } }
+    state = gameReducer(state, { type: 'REPLAY', now: 20_000 })
     expect(state.screen).toBe('transfer')
-    expect(state.transferTasks.length).toBeGreaterThan(0)
-    expect(state.transferTasks[0].sourcePairId).not.toBe(state.runManifest.pairId)
-    expect(state.roundResults[0].independent).toBe(false)
+    expect(state.attemptId).not.toBe(baselineAttemptId)
+    expect(state.attemptKind).toBe('targeted-practice')
+    expect(state.parentAttemptId).toBe(baselineAttemptId)
+    expect(state.startedAt).toBe(20_000)
+    expect(state.completedAt).toBeNull()
+    expect(state.elapsedSeconds).toBe(0)
+    expect(state.saveStatus).toBe('local-draft')
+    expect(state.roundResults).toHaveLength(9)
+    expect(state.transferTasks).toHaveLength(1)
+    expect(state.transferTasks[0].sourceFamilyId).not.toBe(playedFamilyId)
+    expect(state.runManifest).toBe(baselineManifest)
+    expect(state.roundResults).toBe(baselineRoundResults)
+    expect(state.completedProducts).toBe(baselineProducts)
+
     const task = state.transferTasks[0]
-    state = gameReducer(state, { type: 'SUBMIT_TRANSFER', answer: task.expected, now: 20_000 })
-    expect(state.transferResults[0].recovered).toBe(true)
-    expect(state.roundResults[0].independent).toBe(false)
+    const wrongAnswer = task.options.find((option) => option !== task.expected)!
+    state = gameReducer(state, { type: 'SUBMIT_TRANSFER', answer: wrongAnswer, now: 20_500 })
+    expect(state.screen).toBe('transfer')
+    expect(state.transferResults).toEqual([])
+    expect(state.transferTasks[0]).toMatchObject({ attempts: 1, submittedAnswers: [wrongAnswer] })
+    expect(state.feedback).toMatchObject({ kind: 'error', message: task.correctiveFeedback })
+
+    state = gameReducer(state, { type: 'SUBMIT_TRANSFER', answer: task.expected, now: 21_000 })
+    expect(state.screen).toBe('end')
+    expect(state.transferResults).toEqual([expect.objectContaining({
+      attempts: 2,
+      correctiveFeedbackShown: true,
+      outcome: 'recovered',
+      recovered: true,
+      submittedAnswers: [wrongAnswer, task.expected],
+      taskId: task.id,
+    })])
+    expect(state.completedAt).toBe(21_000)
+    expect(state.elapsedSeconds).toBe(1)
+    expect(buildFinalPayload(state)).toMatchObject({
+      attemptKind: 'targeted-practice',
+      parentAttemptId: baselineAttemptId,
+      completionPercent: 100,
+    })
+    expect(supportedResult).toMatchObject({ independent: false, repairs: 1 })
+    expect(state.runManifest).toBe(baselineManifest)
+    expect(state.roundResults).toBe(baselineRoundResults)
+    expect(state.completedProducts).toBe(baselineProducts)
+    expect(buildTeacherSummary(buildFinalPayload(state))).toContain('Baseline only - original 9-stage run')
+    const afterDuplicate = gameReducer(state, { type: 'SUBMIT_TRANSFER', answer: task.expected, now: 22_000 })
+    expect(afterDuplicate).toBe(state)
   })
 
-  it('creates a new attempt and unseen order on full replay, then clears identity for Next Student', () => {
-    let state = completeRun(startRun('Maya'))
-    const attemptId = state.attemptId
-    const pairId = state.runManifest.pairId
-    state = gameReducer(state, { type: 'REPLAY', now: 30_000 })
-    expect(state.attemptId).not.toBe(attemptId)
-    expect(state.runManifest.pairId).not.toBe(pairId)
-    expect(state.identity.firstName).toBe('Maya')
-    state = gameReducer(state, { type: 'RESTART', now: 40_000 })
-    expect(state.identity.firstName).toBe('')
-    expect(state.identity.period).toBe('3')
+  it('ends targeted practice after a second miss with an explicit not-yet-recovered result', () => {
+    let state = targetedReplayForStage(1, 30_000)
+    const task = state.transferTasks[0]
+    const wrongAnswers = task.options.filter((option) => option !== task.expected)
+
+    state = gameReducer(state, { type: 'SUBMIT_TRANSFER', answer: wrongAnswers[0], now: 30_500 })
+    expect(state.screen).toBe('transfer')
+    state = gameReducer(state, { type: 'SUBMIT_TRANSFER', answer: wrongAnswers[1] ?? wrongAnswers[0], now: 31_000 })
+
+    expect(state.screen).toBe('end')
+    expect(state.recoveredConcepts).not.toContain(task.targetCategory)
+    expect(state.transferResults[0]).toMatchObject({
+      attempts: 2,
+      correctiveFeedbackShown: true,
+      outcome: 'not-yet-recovered',
+      recovered: false,
+    })
+    const summary = buildTeacherSummary(buildFinalPayload(state))
+    expect(summary).toContain('Result: Not yet recovered')
+    expect(summary).toContain('original factory run was not repeated')
+  })
+
+  it('provides stage-specific new evidence for every targeted-practice skill', () => {
+    const transcription = targetedReplayForStage(0, 40_000).transferTasks[0]
+    expect(transcription.stimulus).toMatchObject({ kind: 'transcription' })
+    if (transcription.stimulus.kind === 'transcription') {
+      expect(transcription.stimulus.dnaTemplate).toHaveLength(15)
+    }
+
+    const translation = targetedReplayForStage(1, 41_000).transferTasks[0]
+    expect(translation.stimulus).toMatchObject({ kind: 'translation' })
+    if (translation.stimulus.kind === 'translation') {
+      expect(translation.stimulus.mrnaCodons).toHaveLength(5)
+      expect(translation.expected.split('-')).toHaveLength(5)
+    }
+
+    const functionTest = targetedReplayForStage(2, 42_000).transferTasks[0]
+    expect(functionTest.stimulus).toMatchObject({ kind: 'function-test' })
+    if (functionTest.stimulus.kind === 'function-test') {
+      expect(functionTest.stimulus.aminoAcidChain).toHaveLength(4)
+      expect(functionTest.stimulus.referenceRows.some((row) => row.id === functionTest.expected)).toBe(true)
+    }
+  })
+
+  it('replays with a different family and resets identity for the next student', () => {
+    const completed = completeRun(startRun('Maya'))
+    const attemptId = completed.attemptId
+    const familyId = completed.runManifest.familyId
+    const replayed = gameReducer(completed, { type: 'REPLAY', now: 30_000 })
+
+    expect(replayed.attemptId).not.toBe(attemptId)
+    expect(replayed.runManifest.familyId).not.toBe(familyId)
+    expect(replayed.identity.firstName).toBe('Maya')
+    expect(replayed.screen).toBe('playing')
+    expect(replayed.roundResults).toEqual([])
+    expect(replayed.completedProducts).toEqual([])
+    expect(gameReducer(replayed, { type: 'REPLAY', now: 30_001 })).toBe(replayed)
+
+    const nextStudent = gameReducer(completed, { type: 'RESTART', now: 40_000 })
+    expect(nextStudent.identity.firstName).toBe('')
+    expect(nextStudent.identity.period).toBe('3')
+    expect(nextStudent.screen).toBe('start')
+  })
+
+  it('makes rapid checks and continues idempotent', () => {
+    let state = startRun('Rae')
+    state = completeCurrentAction(state)
+    expect(gameReducer(state, { type: 'CHECK_BASE_ROUND' })).toBe(state)
+
+    state = gameReducer(state, { type: 'CONTINUE_AFTER_SUCCESS', now: 2_000 })
+    expect(gameReducer(state, { type: 'CONTINUE_AFTER_SUCCESS', now: 2_001 })).toBe(state)
+    const translation = state.runManifest.rounds[state.currentRoundIndex]
+    expect(translation.type).toBe('translation')
+    if (translation.type !== 'translation') return
+    state = gameReducer(state, { type: 'SELECT_TRANSLATION', index: 0, value: translation.answers[0] })
+    state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
+    expect(gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })).toBe(state)
+    expect(state.roundState.attempts).toBe(1)
+
+    state = completeCurrentAction(state)
+    state = gameReducer(state, { type: 'CONTINUE_AFTER_SUCCESS', now: 3_000 })
+    state = completeCurrentAction(state)
+    expect(gameReducer(state, { type: 'CHECK_FUNCTION_ROW' })).toBe(state)
+    expect(state.roundResults).toHaveLength(3)
+    expect(state.completedProducts).toHaveLength(1)
   })
 })
 
 function startRun(name: string): GameSessionState {
-  let state = createInitialGameState(1000)
-  state = gameReducer(state, { type: 'START_GAME', demoMode: false, firstName: name, period: '3', settings, now: 1000 })
+  let state = createInitialGameState(1_000)
+  const rejected = gameReducer(state, {
+    type: 'START_GAME', demoMode: false, firstName: '', period: '3', settings, now: 1_000,
+  })
+  expect(rejected).toBe(state)
+  state = gameReducer(state, {
+    type: 'START_GAME', demoMode: false, firstName: name, period: '3', settings, now: 1_000,
+  })
+  expect(state.screen).toBe('tutorial')
   state = gameReducer(state, { type: 'START_ROUNDS' })
-  state = gameReducer(state, { type: 'BEGIN_ROUND' })
-  state = gameReducer(state, { type: 'OPEN_ACTIVE_STATION' })
+  expect(state.screen).toBe('playing')
   return state
 }
 
 function completeRun(state: GameSessionState): GameSessionState {
-  return completeRemainingRun(state, 0)
+  return completeRemainingRun(state)
 }
 
-function completeRemainingRun(state: GameSessionState, startIndex: number): GameSessionState {
+function targetedReplayForStage(stageIndex: number, now: number): GameSessionState {
+  const baseline = completeRun(startRun(`Practice ${stageIndex}`))
+  const roundResults = baseline.roundResults.map((result, index): RoundResult => index === stageIndex
+    ? { ...result, firstTryCorrect: false, independent: false, mistakes: 1, repairs: 1, supportLevel: 1 }
+    : result)
+  return gameReducer({
+    ...baseline,
+    roundResults,
+    settings: { ...baseline.settings, replayMode: 'targeted' },
+  }, { type: 'REPLAY', now })
+}
+
+function completeRemainingRun(state: GameSessionState): GameSessionState {
   let next = state
-  for (let index = startIndex; index < next.runManifest.rounds.length; index += 1) {
-    const round = next.runManifest.rounds[index]
-    if (!next.taskDockOpen) next = gameReducer(next, { type: 'OPEN_ACTIVE_STATION' })
-    next = completeRound(next, round)
-    next = gameReducer(next, { type: 'CONTINUE_AFTER_SUCCESS', now: 2000 + index * 1000 })
+  while (next.screen === 'playing' || next.screen === 'sequence-transition') {
+    if (!next.roundResults.some((result) => result.round === next.currentRoundIndex + 1)) {
+      next = completeCurrentAction(next)
+    }
+    next = gameReducer(next, { type: 'CONTINUE_AFTER_SUCCESS', now: 2_000 + next.currentRoundIndex * 1_000 })
   }
   return next
 }
 
-function completeRound(state: GameSessionState, round: GameRound): GameSessionState {
+function completeAndContinue(state: GameSessionState): GameSessionState {
+  const completed = completeCurrentAction(state)
+  return gameReducer(completed, { type: 'CONTINUE_AFTER_SUCCESS', now: 2_000 + state.currentRoundIndex * 1_000 })
+}
+
+function completeCurrentAction(state: GameSessionState): GameSessionState {
+  const round = state.runManifest.rounds[state.currentRoundIndex]
   let next = state
-  if (round.type === 'dna' || round.type === 'transcription') {
+  if (round.type === 'transcription') {
     next = enterBases(next, round.answer)
     return gameReducer(next, { type: 'CHECK_BASE_ROUND' })
   }
   if (round.type === 'translation') {
-    round.answers.forEach((answer, index) => {
-      next = gameReducer(next, { type: 'SELECT_TRANSLATION', index, value: answer })
-    })
-    return gameReducer(next, { type: 'CHECK_FULL_TRANSLATION' })
+    for (let index = next.roundState.currentCodonIndex; index < round.answers.length; index += 1) {
+      next = gameReducer(next, { type: 'SELECT_TRANSLATION', index, value: round.answers[index] })
+      next = gameReducer(next, { type: 'CHECK_TRANSLATION_CODON' })
+    }
+    return next
   }
-  const option = round.options.find((item) => item.trait === round.correctTrait)!
-  next = gameReducer(next, { type: 'SELECT_PROTEIN', option })
-  return gameReducer(next, { type: 'CHECK_PROTEIN' })
+  next = gameReducer(next, { type: 'SELECT_FUNCTION_ROW', rowId: round.correctRowId })
+  return gameReducer(next, { type: 'CHECK_FUNCTION_ROW' })
 }
 
 function enterBases(state: GameSessionState, sequence: string): GameSessionState {
   return [...sequence].reduce((next, base) => gameReducer(next, { type: 'APPEND_BASE', base }), state)
 }
 
-function createRoundStateFor(round: GameRound) {
-  return {
-    answers: round.type === 'translation' ? new Array(round.codons.length).fill('') : [], attempts: 0,
-    currentCodonIndex: 0, hintUsed: false, input: '', mistakes: 0, narrowedChoices: [], repairTarget: null,
-    selectedProtein: '', selectedTrait: '', showHint: false, supportEvents: [],
-  }
+function withSupportedResults(state: GameSessionState, supportedCount: number): GameSessionState {
+  const roundResults = state.roundResults.map((result, index): RoundResult => index < supportedCount
+    ? { ...result, firstTryCorrect: false, independent: false, mistakes: 1, repairs: 1, supportLevel: 1 }
+    : result)
+  return { ...state, roundResults }
+}
+
+function countDifferences(left: string, right: string): number {
+  return [...left].filter((value, index) => value !== right[index]).length
+}
+
+function countArrayDifferences(left: string[], right: string[]): number {
+  return left.filter((value, index) => value !== right[index]).length
 }

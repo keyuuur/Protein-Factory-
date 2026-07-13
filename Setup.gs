@@ -71,6 +71,7 @@ function ensureLoggingSheets(spreadsheet) {
   getOrCreateSheet_(ss, ATTEMPTS_SHEET_NAME, ATTEMPTS_HEADERS);
   getOrCreateSheet_(ss, BESTSHEET_NAME, BESTSHEET_HEADERS);
   getOrCreateSheet_(ss, PROTEIN_FACTORY_V3_SHEET_NAME, PROTEIN_FACTORY_V3_HEADERS);
+  getOrCreateSheet_(ss, PROTEIN_FACTORY_V4_SHEET_NAME, PROTEIN_FACTORY_V4_HEADERS);
 }
 
 function getSpreadsheet_() {

@@ -4,7 +4,7 @@ export {
   formatMissedRound,
   formatMissedSkill,
   getCompletionPercent,
-  getCorrectProtein,
+  getCorrectFunctionRow,
   getExpectedAnswer,
   getRoundResult,
   selectScore,

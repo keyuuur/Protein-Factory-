@@ -1,71 +1,71 @@
-export type RoundType = 'dna' | 'transcription' | 'translation' | 'protein'
+import type { AminoAcidAbbreviation } from './game/content/codonTable'
 
-export type Screen = 'start' | 'tutorial' | 'intro' | 'playing' | 'success' | 'transfer' | 'end'
-
-export type StationId = 'dna-dock' | 'transcription-press' | 'ribosome-galley' | 'trait-vault'
-
+export type RoundType = 'transcription' | 'translation' | 'protein'
+export type Screen = 'start' | 'tutorial' | 'playing' | 'sequence-transition' | 'transfer' | 'end'
+export type StationId = 'transcription-press' | 'ribosome-galley' | 'trait-vault'
 export type FeedbackKind = 'success' | 'error' | 'info'
-
 export type SaveStatus = 'local-draft' | 'saved-local' | 'failed-local'
-
 export type SupportMode = 'standard' | 'guided'
-
 export type ReplayMode = 'full' | 'targeted'
-
-export type ProductionStage = 'dna-assembly' | 'transcription' | 'translation' | 'function-test'
-
-export type MutationEffect = 'no-change' | 'amino-acid-change' | 'early-stop'
-
-export type OrderRole = 'normal' | 'one-base-variant'
-
+export type AttemptKind = 'full-run' | 'targeted-practice'
+export type ProductionAction = 'transcription' | 'translation' | 'function-test'
+export type MolecularState = 'dna' | 'mrna' | 'amino-acid-chain' | 'protein-function'
+export type MutationEffect = 'same-chain' | 'amino-acid-change'
+export type SequenceEffect = 'original' | MutationEffect
+export type SequenceRole = 'original' | 'same-chain-variant' | 'changed-chain-variant'
 export type ProductionRating = 'Precision' | 'Stable' | 'Supported' | 'Recalibration'
 
 export type MisconceptionCategory =
-  | 'dna-base-pairing'
   | 'rna-template-pairing'
   | 'rna-uses-u'
   | 'codon-lookup'
   | 'codon-grouping'
+  | 'stop-signal'
   | 'protein-trait-model'
   | 'incomplete'
   | 'hint-support'
 
-export interface ProductionSequence {
-  codingDna: string
-  templateDna: string
-  mrna: string
-  mrnaCodons: [string, string, string, string]
-  translatedSlots: [string, string, string, string]
-  proteinChain: string[]
-  functionOutcome: string
+export interface FunctionReferenceRow {
+  id: string
+  aminoAcidSequence: [AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation]
+  proteinFunction: string
+  expressedTrait: string
+  traitColor: 'black' | 'brown' | 'tan' | 'white'
 }
 
-export interface ProteinOrder {
+export interface ProteinSequence {
+  id: string
+  role: SequenceRole
+  effect: SequenceEffect
+  dnaStrand: string
+  mrna: string
+  mrnaCodons: [string, string, string, string, string]
+  translatedSignals: [AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation, 'Stop']
+  aminoAcidChain: [AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation]
+  functionRowId: string
+  changedDnaIndex: number | null
+}
+
+export interface ProteinSequenceFamily {
   id: string
   name: string
-  role: OrderRole
-  sequence: ProductionSequence
-}
-
-export interface ProteinOrderPair {
-  id: string
-  effect: MutationEffect
-  changedMrnaIndex: number
-  normal: ProteinOrder
-  variant: ProteinOrder
+  original: ProteinSequence
+  sameChainVariant: ProteinSequence
+  changedChainVariant: ProteinSequence
 }
 
 export interface StageContext {
-  stage: ProductionStage
-  pairId: string
-  orderId: string
-  orderRole: OrderRole
-  effect: MutationEffect
-  sequence: ProductionSequence
+  action: ProductionAction
+  familyId: string
+  sequenceId: string
+  sequenceRole: SequenceRole
+  sequenceEffect: SequenceEffect
+  sequenceIndex: 0 | 1 | 2
+  sequence: ProteinSequence
 }
 
 export interface RepairTarget {
-  kind: 'base' | 'codon' | 'protein'
+  kind: 'base' | 'codon' | 'function-row'
   index: number
   expected: string
   submitted: string
@@ -74,9 +74,9 @@ export interface RepairTarget {
 }
 
 export interface SupportEvent {
-  kind: 'error-location-rule' | 'narrowed-choices' | 'explicit-hint' | 'codon-chart'
+  kind: 'error-location-rule' | 'narrowed-choices' | 'explicit-hint' | 'reference-wheel'
   attempt: number
-  stage: ProductionStage
+  action: ProductionAction
   location: string
   rule: string
   choices: string[]
@@ -91,15 +91,15 @@ export interface ReplayChallenge {
   label: string
 }
 
-export interface BaseRound {
+export interface TranscriptionRound {
   id: string
-  type: 'dna' | 'transcription'
+  type: 'transcription'
   title: string
   shortTitle: string
   prompt: string
   template: string
   answer: string
-  options: string[]
+  options: ['A', 'U', 'C', 'G']
   hint: string
   context: StageContext
 }
@@ -110,9 +110,9 @@ export interface TranslationRound {
   title: string
   shortTitle: string
   prompt: string
-  codons: string[]
-  answers: string[]
-  mode: 'perCodon' | 'full'
+  codons: [string, string, string, string, string]
+  answers: [AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation, 'Stop']
+  mode: 'perCodon'
   codonChoices: string[][]
   hint: string
   context: StageContext
@@ -125,40 +125,37 @@ export interface ProteinRound {
   shortTitle: string
   prompt: string
   chain: string
-  options: ProteinOption[]
-  correctTrait: string
+  referenceRows: FunctionReferenceRow[]
+  correctRowId: string
   hint: string
   context: StageContext
 }
 
-export interface ProteinOption {
-  protein: string
-  trait: string
-  clue?: string
-}
+export type GameRound = TranscriptionRound | TranslationRound | ProteinRound
 
-export type GameRound = BaseRound | TranslationRound | ProteinRound
-
-export interface RunManifest {
-  schemaVersion: 'protein-factory-v3'
+export interface RunManifestV4 {
+  schemaVersion: 'protein-factory-v4'
+  contentVersion: string
   seed: string
   selectionIndex: number
-  pairId: string
-  effect: MutationEffect
-  orderIds: [string, string]
+  familyId: string
+  sequenceIds: [string, string, string]
+  effects: ['same-chain', 'amino-acid-change']
   rounds: GameRound[]
 }
+
+export type RunManifest = RunManifestV4
 
 export interface RoundState {
   input: string
   answers: string[]
   currentCodonIndex: number
+  pendingTranslationChoice: string
   attempts: number
   mistakes: number
   showHint: boolean
   hintUsed: boolean
-  selectedProtein: string
-  selectedTrait: string
+  selectedFunctionRowId: string
   repairTarget: RepairTarget | null
   supportEvents: SupportEvent[]
   narrowedChoices: string[]
@@ -178,20 +175,19 @@ export interface StageResult {
   firstTryCorrect: boolean
   hintUsed: boolean
   chain?: string
-  selectedProtein?: string
-  selectedTrait?: string
-  expectedProtein?: string
-  expectedTrait?: string
-  stage: ProductionStage
-  pairId: string
-  orderId: string
-  orderRole: OrderRole
-  effect: MutationEffect
+  selectedFunctionRowId?: string
+  expectedFunctionRowId?: string
+  stage: ProductionAction
+  familyId: string
+  sequenceId: string
+  sequenceRole: SequenceRole
+  sequenceEffect: SequenceEffect
+  sequenceIndex: 0 | 1 | 2
   independent: boolean
   repairs: number
   supportLevel: 0 | 1 | 2 | 3
   supportEvents: SupportEvent[]
-  sequence: ProductionSequence
+  sequence: ProteinSequence
 }
 
 export type RoundResult = StageResult
@@ -206,6 +202,7 @@ export interface Feedback {
 export interface StationDefinition {
   id: StationId
   roundType: RoundType
+  action: ProductionAction
   title: string
   shortTitle: string
   prompt: string
@@ -224,24 +221,64 @@ export interface MissedSkill {
   category: MisconceptionCategory
 }
 
+export type TransferStimulus =
+  | {
+      kind: 'transcription'
+      dnaTemplate: string
+    }
+  | {
+      kind: 'translation'
+      mrnaCodons: [string, string, string, string, string]
+    }
+  | {
+      kind: 'function-test'
+      aminoAcidChain: [AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation, AminoAcidAbbreviation]
+      referenceRows: FunctionReferenceRow[]
+    }
+
 export interface TransferTask {
   id: string
-  sourcePairId: string
-  targetStage: ProductionStage
+  sourceFamilyId: string
+  targetStage: ProductionAction
   targetCategory: MisconceptionCategory
+  skillLabel: string
   prompt: string
+  evidencePrompt: string
+  stimulus: TransferStimulus
   expected: string
   options: string[]
+  correctiveFeedback: string
+  attempts: number
+  submittedAnswers: string[]
 }
 
 export interface TransferResult {
   taskId: string
-  sourcePairId: string
-  targetStage: ProductionStage
+  sourceFamilyId: string
+  targetStage: ProductionAction
   targetCategory: MisconceptionCategory
+  skillLabel: string
+  evidence: string
   submitted: string
+  submittedAnswers: string[]
   expected: string
+  attempts: number
+  correctiveFeedbackShown: boolean
+  outcome: 'recovered' | 'not-yet-recovered'
   recovered: boolean
+}
+
+export interface ProductSnapshot {
+  sequenceId: string
+  sequenceRole: SequenceRole
+  label: string
+  dnaStrand: string
+  mrna: string
+  aminoAcidChain: string[]
+  functionRowId: string
+  proteinFunction: string
+  expressedTrait: string
+  traitColor: FunctionReferenceRow['traitColor']
 }
 
 export interface StudentIdentity {
@@ -258,6 +295,8 @@ export interface TeacherSettings {
 
 export interface GameSessionState {
   attemptId: string
+  attemptKind: AttemptKind
+  parentAttemptId: string | null
   screen: Screen
   identity: StudentIdentity
   currentRoundIndex: number
@@ -265,15 +304,14 @@ export interface GameSessionState {
   feedback: Feedback | null
   roundResults: RoundResult[]
   missedSkills: MissedSkill[]
+  completedProducts: ProductSnapshot[]
   startedAt: number
   completedAt: number | null
   elapsedSeconds: number
   isCodonWheelOpen: boolean
-  taskDockOpen: boolean
-  selectedStationId: StationId | null
   saveStatus: SaveStatus
   replayChallenge: ReplayChallenge | null
-  runManifest: RunManifest
+  runManifest: RunManifestV4
   transferTasks: TransferTask[]
   transferResults: TransferResult[]
   recoveredConcepts: MisconceptionCategory[]
@@ -282,8 +320,10 @@ export interface GameSessionState {
 }
 
 export interface FinalGamePayload {
-  schemaVersion: string
+  schemaVersion: 'protein-factory-v4'
   attemptId: string
+  attemptKind: AttemptKind
+  parentAttemptId: string | null
   timestamp: string
   game: string
   gameVersion: string
@@ -291,10 +331,12 @@ export interface FinalGamePayload {
   studentName: string
   isDemo: boolean
   score: number
-  maxScore: number
+  maxScore: 9
   roundsCompleted: number
-  totalRounds: number
+  totalRounds: 9
   percent: number
+  completionPercent: number
+  independencePercent: number
   attempts: number
   mistakes: number
   cleanRounds: number
@@ -313,8 +355,9 @@ export interface FinalGamePayload {
   submitType: 'Final Submit'
   roundResults: RoundResult[]
   missedSkills: MissedSkill[]
-  runManifest: RunManifest
+  runManifest: RunManifestV4
   stageResults: StageResult[]
+  completedProducts: ProductSnapshot[]
   transferResults: TransferResult[]
   recoveredConcepts: MisconceptionCategory[]
 }
@@ -336,16 +379,34 @@ export interface AppsScriptAttemptPayload {
   roundResults: RoundResult[]
   userAgent: string
   schemaVersion: string
+  familyId: string
+  sequenceIds: [string, string, string]
+  completedProducts: ProductSnapshot[]
 }
+
+export interface CheckpointEnvelopeV4 {
+  schemaVersion: 'protein-factory-checkpoint-v4'
+  savedAt: string
+  state: GameSessionState
+}
+
+export interface ProteinFactoryAttemptV4 extends FinalGamePayload {}
 
 export interface FactorySceneState {
   activeStationId: StationId
-  selectedStationId: StationId | null
   completedStationIds: StationId[]
   inputLocked: boolean
   progress: number
+  sequenceIndex: 0 | 1 | 2
+  activeAction: ProductionAction
   cargoLabel: string
   statusKind: FeedbackKind
   repairActive: boolean
   activeStationLabel: string
+  dnaStrand: string
+  mrna: string
+  aminoAcidChain: string[]
+  selectedFunctionRowId: string
+  completedProducts: ProductSnapshot[]
+  transitionActive: boolean
 }

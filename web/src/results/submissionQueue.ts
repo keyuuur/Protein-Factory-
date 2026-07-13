@@ -1,152 +1,211 @@
-import type { ProteinFactoryAttemptV3 } from './appsScriptMapper'
+import type { ProteinFactorySubmissionAttempt } from './appsScriptMapper'
+import type { PersistedSubmissionItem, ResultRepository } from './resultRepository'
 
-const queueStorageKey = 'pirate-protein-factory:submission-queue-v1'
-const queueSchemaVersion = 'submission-queue-v1'
 const maxQueueItems = 30
+const retryDelaysMs = [5_000, 15_000, 60_000, 300_000, 900_000] as const
 
 export type SubmissionStatus =
   | 'local-draft'
+  | 'queued'
   | 'saving'
   | 'submitted'
   | 'waiting-for-connection'
+  | 'retry-scheduled'
+  | 'failed-terminal'
   | 'failed'
 
-export interface SubmissionQueueItem {
-  attempt: ProteinFactoryAttemptV3
-  error?: string
-  retryCount: number
+export interface SubmissionQueueItem extends PersistedSubmissionItem {
   status: SubmissionStatus
-  updatedAt: string
-}
-
-interface SubmissionQueueEnvelope {
-  items: SubmissionQueueItem[]
-  schemaVersion: typeof queueSchemaVersion
 }
 
 export interface SubmissionQueueOptions {
+  attemptId?: string
   endpoint?: string
   fetcher?: typeof fetch
+  force?: boolean
   isOnline?: () => boolean
+  now?: () => number
   onStatusChange?: (item: SubmissionQueueItem) => void
-  storage?: Storage
+  repository: ResultRepository
 }
 
-let activeRetry: Promise<SubmissionQueueItem[]> | null = null
+const activeDrains = new WeakMap<ResultRepository, Promise<SubmissionQueueItem[]>>()
+const queueMutations = new WeakMap<ResultRepository, Promise<void>>()
 
-export function queueSubmission(
-  attempt: ProteinFactoryAttemptV3,
-  storage = getBrowserStorage(),
-): SubmissionQueueItem {
-  const existing = readSubmissionQueue(storage).find((item) => item.attempt.attemptId === attempt.attemptId)
-  if (existing?.status === 'submitted') {
-    return existing
-  }
+export async function queueSubmission(
+  attempt: ProteinFactorySubmissionAttempt,
+  repository: ResultRepository,
+  now = Date.now(),
+): Promise<SubmissionQueueItem> {
+  return withQueueMutation(repository, async () => {
+    await repository.initialize()
+    const items = asQueueItems(await repository.getQueue())
+    const existing = items.find((item) => item.attemptId === attempt.attemptId)
+    if (existing) return existing
 
-  const item: SubmissionQueueItem = {
-    attempt,
-    retryCount: existing?.retryCount ?? 0,
-    status: 'local-draft',
-    updatedAt: new Date().toISOString(),
-  }
-  writeQueueItem(item, storage)
-  return item
-}
-
-export function readSubmissionQueue(storage = getBrowserStorage()): SubmissionQueueItem[] {
-  try {
-    const raw = storage.getItem(queueStorageKey)
-    if (!raw) {
-      return []
+    const timestamp = new Date(now).toISOString()
+    const item: SubmissionQueueItem = {
+      attempt: clone(attempt),
+      attemptId: attempt.attemptId,
+      createdAt: timestamp,
+      durability: repository.durability,
+      retryCount: 0,
+      status: 'queued',
+      updatedAt: timestamp,
     }
-
-    const parsed: unknown = JSON.parse(raw)
-    if (!isRecord(parsed) || parsed.schemaVersion !== queueSchemaVersion || !Array.isArray(parsed.items)) {
-      return []
-    }
-
-    return parsed.items.filter(isQueueItem)
-  } catch {
-    return []
-  }
-}
-
-export function retryPendingSubmissions(options: SubmissionQueueOptions = {}): Promise<SubmissionQueueItem[]> {
-  if (activeRetry) {
-    return activeRetry
-  }
-
-  activeRetry = retryPendingSubmissionsInternal(options).finally(() => {
-    activeRetry = null
+    const nextItems = [item, ...items]
+    const pending = nextItems.filter((entry) => entry.status !== 'submitted')
+    const submitted = nextItems.filter((entry) => entry.status === 'submitted')
+      .slice(0, Math.max(0, maxQueueItems - pending.length))
+    await repository.putQueue([...pending, ...submitted])
+    return item
   })
-  return activeRetry
 }
 
-async function retryPendingSubmissionsInternal(
-  options: SubmissionQueueOptions,
-): Promise<SubmissionQueueItem[]> {
-  const storage = options.storage ?? getBrowserStorage()
-  const isOnline = options.isOnline ?? getOnlineStatus
-  const candidates = readSubmissionQueue(storage).filter((item) => item.status !== 'submitted')
+export async function readSubmissionQueue(repository: ResultRepository): Promise<SubmissionQueueItem[]> {
+  await repository.initialize()
+  return asQueueItems(await repository.getQueue())
+}
 
-  if (!isOnline()) {
-    return candidates.map((item) => updateStatus(item, 'waiting-for-connection', storage, options))
+export function retryPendingSubmissions(options: SubmissionQueueOptions): Promise<SubmissionQueueItem[]> {
+  const active = activeDrains.get(options.repository)
+  if (active) {
+    return active.then(
+      () => retryPendingSubmissions(options),
+      () => retryPendingSubmissions(options),
+    )
   }
+  const drain = drainQueue(options).finally(() => activeDrains.delete(options.repository))
+  activeDrains.set(options.repository, drain)
+  return drain
+}
 
-  const results: SubmissionQueueItem[] = []
-  for (const item of candidates) {
-    const savingItem = updateStatus(item, 'saving', storage, options)
+export function retryDelayMs(retryCount: number): number {
+  return retryDelaysMs[Math.min(Math.max(retryCount - 1, 0), retryDelaysMs.length - 1)]
+}
+
+async function drainQueue(options: SubmissionQueueOptions): Promise<SubmissionQueueItem[]> {
+  const now = options.now ?? Date.now
+  const isOnline = options.isOnline ?? getOnlineStatus
+  const processed = new Map<string, SubmissionQueueItem>()
+
+  while (true) {
+    const queue = await readSubmissionQueue(options.repository)
+    const candidate = queue.find((item) =>
+      (!options.attemptId || item.attemptId === options.attemptId) &&
+      isReady(item, now(), options.force === true) &&
+      !processed.has(item.attemptId),
+    )
+    if (!candidate) return queue
+
+    if (!isOnline()) {
+      const waiting = await updateItem(candidate, {
+        error: 'No network connection.',
+        status: 'waiting-for-connection',
+      }, options, now())
+      processed.set(waiting.attemptId, waiting)
+      continue
+    }
+
+    const saving = await updateItem(candidate, {
+      error: undefined,
+      lastAttemptAt: new Date(now()).toISOString(),
+      retryCount: candidate.retryCount + 1,
+      status: 'saving',
+    }, options, now())
+
     try {
       const response = await (options.fetcher ?? fetch)(options.endpoint ?? '/api/attempt', {
-        body: JSON.stringify({ attempt: savingItem.attempt }),
+        body: JSON.stringify({ attempt: saving.attempt }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
       })
-      const responseBody = await readResponseBody(response)
-      if (!response.ok || responseBody.ok !== true) {
-        const message = typeof responseBody.error === 'string' ? responseBody.error : `Submission failed (${response.status}).`
-        results.push(updateStatus(savingItem, 'failed', storage, options, message))
+      const body = await readResponseBody(response)
+      if (response.ok && body.ok === true) {
+        const submitted = await updateItem(saving, {
+          error: undefined,
+          lastHttpStatus: response.status,
+          nextRetryAt: undefined,
+          status: 'submitted',
+        }, options, now())
+        processed.set(submitted.attemptId, submitted)
         continue
       }
 
-      results.push(updateStatus(savingItem, 'submitted', storage, options))
+      const message = typeof body.error === 'string' ? body.error : `Submission failed (${response.status}).`
+      const retryable = typeof body.retryable === 'boolean'
+        ? body.retryable
+        : isRetryableStatus(response.status)
+      const failed = await updateItem(saving, {
+        error: message,
+        lastHttpStatus: response.status,
+        nextRetryAt: retryable ? new Date(now() + retryDelayMs(saving.retryCount)).toISOString() : undefined,
+        status: retryable ? 'retry-scheduled' : 'failed-terminal',
+      }, options, now())
+      processed.set(failed.attemptId, failed)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'The submission request could not connect.'
-      results.push(updateStatus(savingItem, 'waiting-for-connection', storage, options, message))
+      const failed = await updateItem(saving, {
+        error: error instanceof Error ? error.message : 'The submission request could not connect.',
+        nextRetryAt: new Date(now() + retryDelayMs(saving.retryCount)).toISOString(),
+        status: 'waiting-for-connection',
+      }, options, now())
+      processed.set(failed.attemptId, failed)
     }
   }
-
-  return results
 }
 
-function updateStatus(
+async function updateItem(
   item: SubmissionQueueItem,
-  status: SubmissionStatus,
-  storage: Storage,
+  changes: Partial<SubmissionQueueItem>,
   options: SubmissionQueueOptions,
-  error?: string,
-): SubmissionQueueItem {
-  const nextItem: SubmissionQueueItem = {
-    ...item,
-    error,
-    retryCount: status === 'saving' ? item.retryCount + 1 : item.retryCount,
-    status,
-    updatedAt: new Date().toISOString(),
-  }
-  writeQueueItem(nextItem, storage)
-  options.onStatusChange?.(nextItem)
-  return nextItem
+  now: number,
+): Promise<SubmissionQueueItem> {
+  return withQueueMutation(options.repository, async () => {
+    const next: SubmissionQueueItem = {
+      ...item,
+      ...changes,
+      attempt: item.attempt,
+      attemptId: item.attemptId,
+      durability: options.repository.durability,
+      updatedAt: new Date(now).toISOString(),
+    }
+    const queue = await readSubmissionQueue(options.repository)
+    await options.repository.putQueue(queue.map((current) => current.attemptId === item.attemptId ? next : current))
+    options.onStatusChange?.(clone(next))
+    return next
+  })
 }
 
-function writeQueueItem(item: SubmissionQueueItem, storage: Storage): void {
-  const items = readSubmissionQueue(storage).filter(
-    (existing) => existing.attempt.attemptId !== item.attempt.attemptId,
-  )
-  const envelope: SubmissionQueueEnvelope = {
-    items: [item, ...items].slice(0, maxQueueItems),
-    schemaVersion: queueSchemaVersion,
+async function withQueueMutation<T>(repository: ResultRepository, mutation: () => Promise<T>): Promise<T> {
+  const previous = queueMutations.get(repository) ?? Promise.resolve()
+  let release = () => {}
+  const current = new Promise<void>((resolve) => { release = resolve })
+  const chained = previous.then(() => current)
+  queueMutations.set(repository, chained)
+  await previous
+  try {
+    return await mutation()
+  } finally {
+    release()
+    if (queueMutations.get(repository) === chained) queueMutations.delete(repository)
   }
-  storage.setItem(queueStorageKey, JSON.stringify(envelope))
+}
+
+function isReady(item: SubmissionQueueItem, now: number, force: boolean): boolean {
+  if (item.status === 'submitted') return false
+  if (force) return true
+  if (item.status === 'failed-terminal') return false
+  return item.nextRetryAt === undefined || Date.parse(item.nextRetryAt) <= now
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500
+}
+
+function asQueueItems(items: PersistedSubmissionItem[]): SubmissionQueueItem[] {
+  return items.filter((item): item is SubmissionQueueItem =>
+    ['local-draft', 'queued', 'saving', 'submitted', 'waiting-for-connection', 'retry-scheduled', 'failed-terminal', 'failed'].includes(item.status),
+  )
 }
 
 async function readResponseBody(response: Response): Promise<Record<string, unknown>> {
@@ -158,29 +217,14 @@ async function readResponseBody(response: Response): Promise<Record<string, unkn
   }
 }
 
-function getBrowserStorage(): Storage {
-  if (typeof window === 'undefined') {
-    throw new Error('Submission storage is only available in the browser.')
-  }
-  return window.localStorage
-}
-
 function getOnlineStatus(): boolean {
   return typeof navigator === 'undefined' || navigator.onLine
 }
 
-function isQueueItem(value: unknown): value is SubmissionQueueItem {
-  return (
-    isRecord(value) &&
-    isRecord(value.attempt) &&
-    typeof value.attempt.attemptId === 'string' &&
-    typeof value.attempt.schemaVersion === 'string' &&
-    typeof value.retryCount === 'number' &&
-    typeof value.updatedAt === 'string' &&
-    ['local-draft', 'saving', 'submitted', 'waiting-for-connection', 'failed'].includes(String(value.status))
-  )
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function clone<T>(value: T): T {
+  return typeof structuredClone === 'function' ? structuredClone(value) : JSON.parse(JSON.stringify(value)) as T
 }

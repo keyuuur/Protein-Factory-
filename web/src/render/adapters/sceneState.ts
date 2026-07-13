@@ -1,220 +1,198 @@
-import { defaultRunManifest, stationForRoundType, stationIdForRoundType } from '../../game/content/rounds'
-import { selectCompletedStationIds } from '../../game/simulation/gameReducer'
-import type { FactorySceneState, GameRound, GameSessionState, ProteinRound, StationId } from '../../types'
+import { defaultRunManifest, stationIdForRoundType } from '../../game/content/rounds'
+import type {
+  FactorySceneState,
+  FunctionReferenceRow,
+  GameRound,
+  GameSessionState,
+  ProductSnapshot,
+  ProductionAction,
+  ProteinRound,
+  RepairTarget,
+  StationId,
+} from '../../types'
 
-export type LabCargoKind = 'dna' | 'mrna' | 'amino-acids' | 'protein-test'
-
-export interface ProteinComparison {
-  normalLabel: string
-  variantLabel: string
-  selectedLabel: string
-  traitLabel: string
-  pigmentActive: boolean
+export interface FunctionSelection {
+  rowId: string
+  proteinFunction: string
+  expressedTrait: string
+  traitColor: FunctionReferenceRow['traitColor']
 }
 
 export interface FactorySceneSnapshot extends FactorySceneState {
-  cargoKind: LabCargoKind
-  templateSequence: string
-  productSequence: string
   codons: string[]
-  aminoAcids: string[]
-  proteinComparison: ProteinComparison | null
+  currentCodonIndex: number
+  repairTarget: RepairTarget | null
+  selectedFunction: FunctionSelection | null
+  feedbackTitle: string
+  feedbackMessage: string
   stageComplete: boolean
 }
 
 export function buildFactorySceneState(state: GameSessionState): FactorySceneSnapshot {
   const rounds = state.runManifest.rounds
-  const currentRound = rounds[state.currentRoundIndex]
-  const activeStationId = stationIdForRoundType(currentRound.type)
-  const activeStation = stationForRoundType(currentRound.type)
-  const cargo = getCargoSnapshot(currentRound, state)
+  const currentRound = rounds[state.currentRoundIndex] ?? rounds[0]
+  const { action, sequence, sequenceIndex } = currentRound.context
+  const selectedFunction = getSelectedFunction(currentRound, state.roundState.selectedFunctionRowId)
+  const stageComplete = state.roundResults.some((result) => result.id === currentRound.id)
 
   return {
-    activeStationId,
-    selectedStationId: state.selectedStationId,
-    completedStationIds: selectCompletedStationIds(state),
+    activeStationId: stationIdForRoundType(currentRound.type),
+    completedStationIds: completedStations(state),
     inputLocked: state.isCodonWheelOpen || state.screen !== 'playing',
-    progress: state.roundResults.length / rounds.length,
-    cargoLabel: cargo.productSequence || cargo.templateSequence || activeStation.shortTitle,
-    statusKind: state.feedback?.kind ?? 'info',
-    repairActive: Boolean(state.roundState.repairTarget),
-    activeStationLabel: labStationLabel(activeStationId),
-    ...cargo,
-    stageComplete: state.screen === 'success' || state.screen === 'end',
+    progress: rounds.length > 0 ? Math.min(1, state.roundResults.length / rounds.length) : 0,
+    sequenceIndex,
+    activeAction: action,
+    cargoLabel: cargoLabel(action, sequenceIndex),
+    statusKind: state.feedback?.kind ?? (state.screen === 'sequence-transition' ? 'success' : 'info'),
+    repairActive: state.roundState.repairTarget !== null,
+    activeStationLabel: actionLabel(action),
+    dnaStrand: sequence.dnaStrand,
+    mrna: action === 'transcription' ? state.roundState.input : sequence.mrna,
+    aminoAcidChain: currentAminoAcids(currentRound, state),
+    selectedFunctionRowId: state.roundState.selectedFunctionRowId,
+    completedProducts: state.completedProducts,
+    transitionActive: state.screen === 'sequence-transition',
+    codons: [...sequence.mrnaCodons],
+    currentCodonIndex: state.roundState.currentCodonIndex,
+    repairTarget: state.roundState.repairTarget,
+    selectedFunction,
+    feedbackTitle: state.feedback?.title ?? '',
+    feedbackMessage: state.feedback?.message ?? '',
+    stageComplete,
   }
 }
 
 export function buildSuccessSceneState(round: GameRound): FactorySceneSnapshot {
-  const activeStationId = stationIdForRoundType(round.type)
-  const cargo = getCompletedCargoSnapshot(round)
+  const { action, sequence, sequenceIndex } = round.context
+  const selectedFunction = round.type === 'protein'
+    ? getSelectedFunction(round, round.correctRowId)
+    : null
+  const completedProducts = round.type === 'protein' && selectedFunction
+    ? [productFromRound(round, selectedFunction)]
+    : []
 
   return {
-    activeStationId,
-    selectedStationId: activeStationId,
-    completedStationIds: [activeStationId],
+    activeStationId: stationIdForRoundType(round.type),
+    completedStationIds: [stationIdForRoundType(round.type)],
     inputLocked: true,
     progress: 1,
-    cargoLabel: cargo.productSequence || cargo.templateSequence,
+    sequenceIndex,
+    activeAction: action,
+    cargoLabel: cargoLabel(action, sequenceIndex),
     statusKind: 'success',
     repairActive: false,
-    activeStationLabel: labStationLabel(activeStationId),
-    ...cargo,
+    activeStationLabel: actionLabel(action),
+    dnaStrand: sequence.dnaStrand,
+    mrna: sequence.mrna,
+    aminoAcidChain: [...sequence.aminoAcidChain],
+    selectedFunctionRowId: selectedFunction?.rowId ?? '',
+    completedProducts,
+    transitionActive: action === 'function-test',
+    codons: [...sequence.mrnaCodons],
+    currentCodonIndex: 4,
+    repairTarget: null,
+    selectedFunction,
+    feedbackTitle: 'Action complete',
+    feedbackMessage: 'Cargo is ready for the next production action.',
     stageComplete: true,
   }
 }
 
-export function buildFinalSceneState(): FactorySceneSnapshot {
+export function buildFinalSceneState(completedProducts: ProductSnapshot[] = defaultProducts()): FactorySceneSnapshot {
   const finalRound = defaultRunManifest.rounds[defaultRunManifest.rounds.length - 1]
   const snapshot = buildSuccessSceneState(finalRound)
+  const lastProduct = completedProducts[completedProducts.length - 1]
+
   return {
     ...snapshot,
-    completedStationIds: ['dna-dock', 'transcription-press', 'ribosome-galley', 'trait-vault'],
     activeStationId: 'trait-vault',
-    selectedStationId: 'trait-vault',
-    activeStationLabel: 'Function Test Chamber',
+    completedStationIds: ['transcription-press', 'ribosome-galley', 'trait-vault'],
+    activeStationLabel: 'Function Test',
+    cargoLabel: 'Three completed protein products',
+    completedProducts,
+    selectedFunctionRowId: lastProduct?.functionRowId ?? snapshot.selectedFunctionRowId,
+    selectedFunction: lastProduct ? selectionFromProduct(lastProduct) : snapshot.selectedFunction,
+    feedbackTitle: 'Production run complete',
+    feedbackMessage: 'Compare the original protein with both one-base variants.',
+    transitionActive: false,
   }
 }
 
-function getCargoSnapshot(
-  round: GameRound,
-  state: GameSessionState,
-): Pick<
-  FactorySceneSnapshot,
-  'cargoKind' | 'templateSequence' | 'productSequence' | 'codons' | 'aminoAcids' | 'proteinComparison'
-> {
-  if (round.type === 'dna') {
-    return {
-      cargoKind: 'dna',
-      templateSequence: round.template,
-      productSequence: state.roundState.input,
-      codons: [],
-      aminoAcids: [],
-      proteinComparison: null,
-    }
-  }
-
-  if (round.type === 'transcription') {
-    return {
-      cargoKind: 'mrna',
-      templateSequence: round.template,
-      productSequence: state.roundState.input,
-      codons: [],
-      aminoAcids: [],
-      proteinComparison: null,
-    }
-  }
-
-  if (round.type === 'translation') {
-    return {
-      cargoKind: 'amino-acids',
-      templateSequence: round.codons.join(' '),
-      productSequence: state.roundState.answers.filter(Boolean).join('-'),
-      codons: round.codons,
-      aminoAcids: state.roundState.answers,
-      proteinComparison: null,
-    }
-  }
-
-  if (isProteinRound(round)) {
-    return {
-      cargoKind: 'protein-test',
-      templateSequence: round.chain,
-      productSequence: state.roundState.selectedTrait,
-      codons: [],
-      aminoAcids: round.chain.split('-'),
-      proteinComparison: buildProteinComparison(round, state.roundState.selectedProtein, state.roundState.selectedTrait),
-    }
-  }
-
-  return emptyCargo()
+function currentAminoAcids(round: GameRound, state: GameSessionState): string[] {
+  if (round.type === 'transcription') return []
+  if (round.type === 'protein') return [...round.context.sequence.aminoAcidChain]
+  return state.roundState.answers.slice(0, 4)
 }
 
-function getCompletedCargoSnapshot(
-  round: GameRound,
-): Pick<
-  FactorySceneSnapshot,
-  'cargoKind' | 'templateSequence' | 'productSequence' | 'codons' | 'aminoAcids' | 'proteinComparison'
-> {
-  if (round.type === 'dna') {
-    return {
-      cargoKind: 'dna',
-      templateSequence: round.template,
-      productSequence: round.answer,
-      codons: [],
-      aminoAcids: [],
-      proteinComparison: null,
-    }
-  }
+function completedStations(state: GameSessionState): StationId[] {
+  return [...new Set(
+    state.roundResults
+      .filter((result) => result.correct)
+      .map((result) => stationIdForRoundType(result.type)),
+  )]
+}
 
-  if (round.type === 'transcription') {
-    return {
-      cargoKind: 'mrna',
-      templateSequence: round.template,
-      productSequence: round.answer,
-      codons: [],
-      aminoAcids: [],
-      proteinComparison: null,
-    }
-  }
+function getSelectedFunction(round: GameRound, rowId: string): FunctionSelection | null {
+  if (round.type !== 'protein' || !rowId) return null
+  const row = round.referenceRows.find((candidate) => candidate.id === rowId)
+  return row ? selectionFromRow(row) : null
+}
 
-  if (round.type === 'translation') {
-    return {
-      cargoKind: 'amino-acids',
-      templateSequence: round.codons.join(' '),
-      productSequence: round.answers.join('-'),
-      codons: round.codons,
-      aminoAcids: round.answers,
-      proteinComparison: null,
-    }
-  }
-
-  if (!isProteinRound(round)) return emptyCargo()
-
-  const correct = round.options.find((option) => option.trait === round.correctTrait) ?? round.options[0]
+function selectionFromRow(row: FunctionReferenceRow): FunctionSelection {
   return {
-    cargoKind: 'protein-test',
-    templateSequence: round.chain,
-    productSequence: round.correctTrait,
-    codons: [],
-    aminoAcids: round.chain.split('-'),
-    proteinComparison: buildProteinComparison(round, correct?.protein ?? '', round.correctTrait),
+    rowId: row.id,
+    proteinFunction: row.proteinFunction,
+    expressedTrait: row.expressedTrait,
+    traitColor: row.traitColor,
   }
 }
 
-function buildProteinComparison(
-  round: ProteinRound,
-  selectedProtein: string,
-  selectedTrait: string,
-): ProteinComparison {
-  const normal = round.options.find((option) => !/altered|variant/i.test(option.protein)) ?? round.options[0]
-  const variant = round.options.find((option) => /altered|variant/i.test(option.protein)) ?? round.options[1] ?? round.options[0]
-
+function selectionFromProduct(product: ProductSnapshot): FunctionSelection {
   return {
-    normalLabel: normal?.protein ?? 'Normal protein',
-    variantLabel: variant?.protein ?? 'Variant protein',
-    selectedLabel: selectedProtein,
-    traitLabel: selectedTrait,
-    pigmentActive: /melanin|pigment/i.test(selectedTrait),
+    rowId: product.functionRowId,
+    proteinFunction: product.proteinFunction,
+    expressedTrait: product.expressedTrait,
+    traitColor: product.traitColor,
   }
 }
 
-function isProteinRound(round: GameRound): round is ProteinRound {
-  return 'chain' in round && 'correctTrait' in round
-}
-
-function emptyCargo(): Pick<FactorySceneSnapshot, 'cargoKind' | 'templateSequence' | 'productSequence' | 'codons' | 'aminoAcids' | 'proteinComparison'> {
-  return { cargoKind: 'dna', templateSequence: '', productSequence: '', codons: [], aminoAcids: [], proteinComparison: null }
-}
-
-function labStationLabel(stationId: StationId): string {
-  switch (stationId) {
-    case 'dna-dock':
-      return 'DNA Assembly Bench'
-    case 'transcription-press':
-      return 'Transcription Press'
-    case 'ribosome-galley':
-      return 'Ribosome Line'
-    case 'trait-vault':
-      return 'Function Test Chamber'
+function productFromRound(round: ProteinRound, selection: FunctionSelection): ProductSnapshot {
+  const sequence = round.context.sequence
+  return {
+    sequenceId: sequence.id,
+    sequenceRole: sequence.role,
+    label: sequenceLabel(round.context.sequenceIndex),
+    dnaStrand: sequence.dnaStrand,
+    mrna: sequence.mrna,
+    aminoAcidChain: [...sequence.aminoAcidChain],
+    functionRowId: selection.rowId,
+    proteinFunction: selection.proteinFunction,
+    expressedTrait: selection.expressedTrait,
+    traitColor: selection.traitColor,
   }
+}
+
+function defaultProducts(): ProductSnapshot[] {
+  return defaultRunManifest.rounds
+    .filter((round): round is ProteinRound => round.type === 'protein')
+    .map((round) => {
+      const row = round.referenceRows.find((candidate) => candidate.id === round.correctRowId) ?? round.referenceRows[0]
+      return productFromRound(round, selectionFromRow(row))
+    })
+}
+
+function cargoLabel(action: ProductionAction, sequenceIndex: number): string {
+  return `${sequenceLabel(sequenceIndex)} ${actionLabel(action)}`
+}
+
+function sequenceLabel(sequenceIndex: number): string {
+  if (sequenceIndex === 0) return 'Original protein'
+  if (sequenceIndex === 1) return 'Change A'
+  return 'Change B'
+}
+
+function actionLabel(action: ProductionAction): string {
+  if (action === 'transcription') return 'Transcription'
+  if (action === 'translation') return 'Translation'
+  return 'Function Test'
 }

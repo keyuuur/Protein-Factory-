@@ -1,207 +1,180 @@
 import type {
+  FunctionReferenceRow,
   GameRound,
   MisconceptionCategory,
   MutationEffect,
-  ProteinOrder,
-  ProteinOrderPair,
-  ProductionStage,
+  ProteinSequence,
+  ProteinSequenceFamily,
+  ProductionAction,
   RoundType,
-  RunManifest,
+  RunManifestV4,
+  SequenceRole,
   StageContext,
   StageResult,
   StationDefinition,
   StationId,
   TransferTask,
 } from '../../types'
+import {
+  V4_CONTENT_VERSION,
+  V4_FAMILY_DEFINITIONS,
+  V4_FUNCTION_REFERENCE_ROWS,
+  V4_SCHEMA_VERSION,
+} from '../../../shared/catalogV4.js'
+import { CODON_TABLE, translateCodon, type TranslationSignal } from './codonTable'
 
 export const gameName = 'Protein Factory'
-export const gameVersion = 'protein-factory-v3'
-export const schemaVersion = 'protein-factory-v3' as const
-export const stagesPerRun = 8
+export const gameVersion = 'protein-factory-v4'
+export const schemaVersion = V4_SCHEMA_VERSION as 'protein-factory-v4'
+export const contentVersion = V4_CONTENT_VERSION
+export const stagesPerRun = 9
+export const sequencesPerRun = 3
+export const actionsPerSequence = 3
+export const codonMap = CODON_TABLE
 
-export const codonMap: Record<string, string> = {
-  AUG: 'Met',
-  GCU: 'Ala',
-  GCC: 'Ala',
-  UUU: 'Phe',
-  UUC: 'Phe',
-  GGU: 'Gly',
-  GGC: 'Gly',
-  AAA: 'Lys',
-  AAG: 'Lys',
-  GAA: 'Glu',
-  GAG: 'Glu',
-  GUA: 'Val',
-  GUC: 'Val',
-  AGA: 'Arg',
-  CGU: 'Arg',
-  UGG: 'Trp',
-  UAU: 'Tyr',
-  UAC: 'Tyr',
-  CAA: 'Gln',
-  CAG: 'Gln',
-  UAA: 'Stop',
-  UAG: 'Stop',
-  UGA: 'Stop',
-}
+export const functionReferenceRows: FunctionReferenceRow[] = V4_FUNCTION_REFERENCE_ROWS.map((row) => ({
+  ...row,
+  aminoAcidSequence: [...row.aminoAcidSequence] as FunctionReferenceRow['aminoAcidSequence'],
+}))
 
-const usualFunction = 'The pigment enzyme stays active, so the model cell produces its usual pigment.'
-const changedFunction = 'The pigment enzyme may work differently, so the model cell produces a changed pigment level.'
-const earlyStopFunction = 'Translation ends early, so the model cell produces little or no pigment enzyme.'
-const functionChoices = [usualFunction, changedFunction, earlyStopFunction]
+const functionRowsById = new Map(functionReferenceRows.map((row) => [row.id, row]))
 
 export const tutorialSteps = [
-  'Complete one normal protein order and one linked one-base variant.',
-  'Assemble complementary DNA using A-T and C-G pairing.',
-  'Transcribe template DNA into mRNA, using U instead of T.',
-  'Read four mRNA codons from AUG through a stop signal.',
-  'Use the amino-acid chain to predict the protein outcome.',
-  'Corrections add support gradually; the codon chart is always a science tool.',
+  'Process an original DNA strand and two one-base changes.',
+  'Build an mRNA strand by pairing RNA bases with the DNA strand.',
+  'Read five mRNA codons from AUG through the final Stop signal.',
+  'Use the codon wheel to build a four-amino-acid chain.',
+  'Match the chain to the fictional protein-function and fur-color model.',
+  'Corrections add support gradually; the codon wheel is always a reference tool.',
 ] as const
 
 export const conceptGlossary = {
   dna: 'DNA stores genetic instructions.',
-  transcription: 'mRNA is built as a complementary message from a DNA template strand.',
-  codon: 'A codon is a three-base mRNA word.',
+  transcription: 'Transcription builds an mRNA message by pairing RNA bases with a DNA strand.',
+  codon: 'A codon is a group of three mRNA bases.',
   aminoAcid: 'Amino acids join in the order specified by mRNA codons.',
-  protein: 'A protein chain folds into a shape that affects its function.',
-  trait: 'A one-base DNA difference can leave a protein unchanged, change an amino acid, or end translation early.',
+  protein: 'An amino acid chain folds into a protein with a particular function.',
+  trait: 'In this simplified model, protein pigment production is connected to fur color.',
 } as const
 
 export const periodOptions = ['1', '2', '3', '4', '5', '6', '7'] as const
 
 export const stationDefinitions: StationDefinition[] = [
   {
-    id: 'dna-dock',
-    roundType: 'dna',
-    title: 'DNA Assembly',
-    shortTitle: 'DNA',
-    prompt: 'Assemble a complementary DNA template strand.',
-  },
-  {
     id: 'transcription-press',
     roundType: 'transcription',
+    action: 'transcription',
     title: 'Transcription',
     shortTitle: 'mRNA',
-    prompt: 'Build the mRNA message from template DNA.',
+    prompt: 'Build the mRNA strand from the DNA strand.',
   },
   {
     id: 'ribosome-galley',
     roundType: 'translation',
+    action: 'translation',
     title: 'Translation',
-    shortTitle: 'Codons',
-    prompt: 'Use the codon chart to follow the ribosome through the message.',
+    shortTitle: 'Amino Acids',
+    prompt: 'Use the codon wheel to build the amino acid chain.',
   },
   {
     id: 'trait-vault',
     roundType: 'protein',
+    action: 'function-test',
     title: 'Function Test',
     shortTitle: 'Function',
-    prompt: 'Predict how the completed amino-acid chain affects protein function.',
+    prompt: 'Match the amino acid chain to its modeled protein function and fur color.',
   },
 ]
 
-export const proteinOrderPairs: ProteinOrderPair[] = [
-  createPair('cargo-alpha', 'no-change', ['AUG', 'GCU', 'UUU', 'UAA'], ['AUG', 'GCC', 'UUU', 'UAA'], 5),
-  createPair('cargo-gly', 'no-change', ['AUG', 'GGU', 'AAA', 'UAG'], ['AUG', 'GGC', 'AAA', 'UAG'], 5),
-  createPair('cargo-glu', 'amino-acid-change', ['AUG', 'GAA', 'UUU', 'UAA'], ['AUG', 'GUA', 'UUU', 'UAA'], 4),
-  createPair('cargo-lys', 'amino-acid-change', ['AUG', 'AAA', 'GCU', 'UGA'], ['AUG', 'AGA', 'GCU', 'UGA'], 4),
-  createPair('cargo-trp', 'early-stop', ['AUG', 'UGG', 'GCU', 'UAA'], ['AUG', 'UGA', 'GCU', 'UAA'], 5),
-  createPair('cargo-tyr', 'early-stop', ['AUG', 'UAU', 'CAA', 'UAG'], ['AUG', 'UAA', 'CAA', 'UAG'], 5),
-]
+type FiveCodons = [string, string, string, string, string]
 
-export function buildRunManifest(seed: string | number, excludePairIds: string[] = []): RunManifest {
+export const proteinSequenceFamilies: ProteinSequenceFamily[] = V4_FAMILY_DEFINITIONS.map((definition) => createFamily(
+  definition.id,
+  definition.name,
+  [...definition.original.codons] as FiveCodons,
+  [...definition.sameChain.codons] as FiveCodons,
+  [...definition.changedChain.codons] as FiveCodons,
+  definition.original.functionRowId,
+  definition.changedChain.functionRowId,
+))
+
+export function buildRunManifest(seed: string | number, excludeFamilyIds: string[] = []): RunManifestV4 {
   const normalizedSeed = String(seed)
-  const startIndex = hashSeed(normalizedSeed) % proteinOrderPairs.length
-  const excluded = new Set(excludePairIds)
-  const selectedPair = Array.from({ length: proteinOrderPairs.length }, (_, offset) =>
-    proteinOrderPairs[(startIndex + offset) % proteinOrderPairs.length],
-  ).find((pair) => !excluded.has(pair.id))
+  const startIndex = hashSeed(normalizedSeed) % proteinSequenceFamilies.length
+  const excluded = new Set(excludeFamilyIds)
+  const selectedFamily = Array.from({ length: proteinSequenceFamilies.length }, (_, offset) =>
+    proteinSequenceFamilies[(startIndex + offset) % proteinSequenceFamilies.length],
+  ).find((family) => !excluded.has(family.id))
 
-  if (!selectedPair) {
-    throw new Error('Run manifest cannot exclude every protein order pair.')
-  }
+  if (!selectedFamily) throw new Error('Run manifest cannot exclude every protein sequence family.')
 
   return {
     schemaVersion,
+    contentVersion,
     seed: normalizedSeed,
-    selectionIndex: proteinOrderPairs.indexOf(selectedPair),
-    pairId: selectedPair.id,
-    effect: selectedPair.effect,
-    orderIds: [selectedPair.normal.id, selectedPair.variant.id],
-    rounds: buildRoundsForPair(selectedPair),
+    selectionIndex: proteinSequenceFamilies.indexOf(selectedFamily),
+    familyId: selectedFamily.id,
+    sequenceIds: [selectedFamily.original.id, selectedFamily.sameChainVariant.id, selectedFamily.changedChainVariant.id],
+    effects: ['same-chain', 'amino-acid-change'],
+    rounds: buildRoundsForFamily(selectedFamily),
   }
 }
 
-export const defaultRunManifest = buildRunManifest('protein-factory-default')
-export const rounds: GameRound[] = defaultRunManifest.rounds
+export const defaultRunManifest = buildRunManifest('protein-factory-v4-default')
+export const rounds = defaultRunManifest.rounds
 
-export function buildRoundsForPair(pair: ProteinOrderPair): GameRound[] {
-  return [pair.normal, pair.variant].flatMap((order, orderIndex) => {
-    const stageOffset = orderIndex * 4
-    const context = (stage: ProductionStage): StageContext => ({
-      stage,
-      pairId: pair.id,
-      orderId: order.id,
-      orderRole: order.role,
-      effect: pair.effect,
-      sequence: order.sequence,
+export function buildRoundsForFamily(family: ProteinSequenceFamily): GameRound[] {
+  const sequences = [family.original, family.sameChainVariant, family.changedChainVariant] as const
+
+  return sequences.flatMap((sequence, sequenceIndex) => {
+    const context = (action: ProductionAction): StageContext => ({
+      action,
+      familyId: family.id,
+      sequenceId: sequence.id,
+      sequenceRole: sequence.role,
+      sequenceEffect: sequence.effect,
+      sequenceIndex: sequenceIndex as 0 | 1 | 2,
+      sequence,
     })
-    const orderLabel = order.role === 'normal' ? 'Order A' : 'Order B'
-    const sequence = order.sequence
+    const sequenceLabel = sequenceIndex === 0 ? 'Original Protein' : sequenceIndex === 1 ? 'Change A' : 'Change B'
+    const actionOffset = sequenceIndex * actionsPerSequence
 
     return [
       {
-        id: `${order.id}-dna`,
-        type: 'dna',
-        title: `Stage ${stageOffset + 1}: ${orderLabel} DNA Assembly`,
-        shortTitle: `${orderLabel} DNA`,
-        prompt: `Assemble the template DNA strand complementary to the ${orderLabel} coding DNA blueprint.`,
-        template: sequence.codingDna,
-        answer: sequence.templateDna,
-        options: ['A', 'T', 'C', 'G'],
-        hint: 'Apply DNA pairing one position at a time: A-T and C-G.',
-        context: context('dna-assembly'),
-      },
-      {
-        id: `${order.id}-transcription`,
+        id: `${sequence.id}-transcription`,
         type: 'transcription',
-        title: `Stage ${stageOffset + 2}: ${orderLabel} Transcription`,
-        shortTitle: `${orderLabel} mRNA`,
-        prompt: `Transcribe the completed ${orderLabel} template DNA into mRNA.`,
-        template: sequence.templateDna,
+        title: `Action ${actionOffset + 1}: ${sequenceLabel} Transcription`,
+        shortTitle: `${sequenceLabel} mRNA`,
+        prompt: 'Build the mRNA strand by pairing an RNA base with each base in the DNA strand.',
+        template: sequence.dnaStrand,
         answer: sequence.mrna,
         options: ['A', 'U', 'C', 'G'],
-        hint: 'Pair mRNA to the DNA template and use U in RNA instead of T.',
+        hint: 'Pair A with U, T with A, C with G, and G with C.',
         context: context('transcription'),
       },
       {
-        id: `${order.id}-translation`,
+        id: `${sequence.id}-translation`,
         type: 'translation',
-        title: `Stage ${stageOffset + 3}: ${orderLabel} Translation`,
-        shortTitle: `${orderLabel} Codons`,
-        prompt: `Use the codon chart to follow how the ribosome reads the four-codon ${orderLabel} message.`,
+        title: `Action ${actionOffset + 2}: ${sequenceLabel} Translation`,
+        shortTitle: `${sequenceLabel} Amino Acids`,
+        prompt: 'Read each mRNA codon from the center of the wheel outward and build the amino acid chain.',
         codons: [...sequence.mrnaCodons],
-        answers: [...sequence.translatedSlots],
-        mode: 'full',
-        codonChoices: sequence.translatedSlots.map((answer) => buildCodonChoices(answer)),
-        hint: 'Start at AUG, read one codon at a time, and stop translating after the first stop signal.',
+        answers: [...sequence.translatedSignals],
+        mode: 'perCodon',
+        codonChoices: sequence.translatedSignals.map((answer, index) => buildCodonChoices(answer, index)),
+        hint: 'Use one mRNA codon at a time. The final Stop signal ends translation and is not an amino acid.',
         context: context('translation'),
       },
       {
-        id: `${order.id}-function`,
+        id: `${sequence.id}-function`,
         type: 'protein',
-        title: `Stage ${stageOffset + 4}: ${orderLabel} Function Test`,
-        shortTitle: `${orderLabel} Function`,
-        prompt: `Use the completed ${orderLabel} mRNA message and amino-acid chain to predict the protein outcome.`,
-        chain: sequence.proteinChain.join('-'),
-        options: functionChoices.map((trait, index) => ({
-          protein: index === 0 ? 'Active pigment enzyme' : index === 1 ? 'Changed pigment enzyme' : 'Short pigment enzyme',
-          trait,
-          clue: index === 0 ? 'Usual activity and pigment output' : index === 1 ? 'Changed fold or activity' : 'Translation stopped before the full chain formed',
-        })),
-        correctTrait: sequence.functionOutcome,
-        hint: 'Compare the amino-acid chain with the linked order and notice whether translation reached the final stop.',
+        title: `Action ${actionOffset + 3}: ${sequenceLabel} Function Test`,
+        shortTitle: `${sequenceLabel} Function`,
+        prompt: 'Select the table row that matches the completed amino acid chain.',
+        chain: sequence.aminoAcidChain.join('-'),
+        referenceRows: functionReferenceRows,
+        correctRowId: sequence.functionRowId,
+        hint: 'Match all four amino acids first, then read across the same row to the function and fur color.',
         context: context('function-test'),
       },
     ] satisfies GameRound[]
@@ -209,34 +182,35 @@ export function buildRoundsForPair(pair: ProteinOrderPair): GameRound[] {
 }
 
 export function buildTransferTasks(
-  manifest: RunManifest,
+  manifest: RunManifestV4,
   results: StageResult[],
   seed: string | number = `${manifest.seed}:transfer`,
 ): TransferTask[] {
-  const supportedStages = [...new Set(results.filter((result) => !result.independent).map((result) => result.stage))].slice(0, 3)
+  const supportedAction = results.find((result) => !result.independent)?.stage
+  if (!supportedAction) return []
 
-  return supportedStages.map((stage, index) => {
-    const candidates = proteinOrderPairs.filter(
-      (pair) => pair.id !== manifest.pairId && pair.effect !== manifest.effect,
-    )
-    const fallbackCandidates = proteinOrderPairs.filter((pair) => pair.id !== manifest.pairId)
-    const pool = candidates.length > 0 ? candidates : fallbackCandidates
-    const pair = pool[(hashSeed(`${seed}:${stage}`) + index) % pool.length]
-    const round = buildRoundsForPair(pair).find(
-      (candidate) => candidate.context.orderRole === 'one-base-variant' && candidate.context.stage === stage,
-    )!
-    const expected = expectedForRound(round)
+  const candidates = proteinSequenceFamilies.filter((family) => family.id !== manifest.familyId)
+  const family = candidates[hashSeed(`${seed}:${supportedAction}`) % candidates.length]
+  const round = buildRoundsForFamily(family).find(
+    (candidate) => candidate.context.sequenceRole === 'changed-chain-variant' && candidate.context.action === supportedAction,
+  )!
+  const expected = expectedForRound(round)
 
-    return {
-      id: `transfer-${stage}-${pair.id}`,
-      sourcePairId: pair.id,
-      targetStage: stage,
-      targetCategory: categoryForStage(stage),
-      prompt: round.prompt,
-      expected,
-      options: transferChoices(round, expected),
-    }
-  })
+  return [{
+    id: `transfer-${supportedAction}-${family.id}`,
+    sourceFamilyId: family.id,
+    targetStage: supportedAction,
+    targetCategory: categoryForStage(supportedAction),
+    skillLabel: skillLabelForStage(supportedAction),
+    prompt: round.prompt,
+    evidencePrompt: evidencePromptForRound(round),
+    stimulus: transferStimulus(round),
+    expected,
+    options: transferChoices(round, expected),
+    correctiveFeedback: correctiveFeedbackForStage(supportedAction),
+    attempts: 0,
+    submittedAnswers: [],
+  }]
 }
 
 export function stationForRoundType(type: RoundType): StationDefinition {
@@ -247,195 +221,238 @@ export function stationIdForRoundType(type: RoundType): StationId {
   return stationForRoundType(type).id
 }
 
-export function validateProteinOrderPairs(pairs: ProteinOrderPair[] = proteinOrderPairs): string[] {
+export function validateProteinSequenceFamilies(families = proteinSequenceFamilies): string[] {
   const errors: string[] = []
   const ids = new Set<string>()
-  const effectCounts: Record<MutationEffect, number> = {
-    'no-change': 0,
-    'amino-acid-change': 0,
-    'early-stop': 0,
-  }
+  if (families.length !== 6) errors.push(`Expected 6 protein sequence families, received ${families.length}`)
 
-  if (pairs.length !== 6) errors.push(`Expected 6 protein order pairs, received ${pairs.length}`)
+  families.forEach((family) => {
+    if (ids.has(family.id)) errors.push(`Duplicate family id: ${family.id}`)
+    ids.add(family.id)
+    const sequences = [family.original, family.sameChainVariant, family.changedChainVariant]
+    sequences.forEach((sequence) => validateSequence(sequence, errors))
 
-  pairs.forEach((pair) => {
-    if (ids.has(pair.id)) errors.push(`Duplicate pair id: ${pair.id}`)
-    ids.add(pair.id)
-    effectCounts[pair.effect] += 1
-
-    const normal = pair.normal.sequence
-    const variant = pair.variant.sequence
-    if (normal.mrnaCodons.length !== 4 || variant.mrnaCodons.length !== 4) {
-      errors.push(`${pair.id} must contain four mRNA codons per order`)
+    if (countDifferences(family.original.dnaStrand, family.sameChainVariant.dnaStrand) !== 1) {
+      errors.push(`${family.id} same-chain variant must differ by one DNA base`)
     }
-    if (normal.mrnaCodons[0] !== 'AUG' || variant.mrnaCodons[0] !== 'AUG') {
-      errors.push(`${pair.id} must begin with AUG`)
+    if (countDifferences(family.original.dnaStrand, family.changedChainVariant.dnaStrand) !== 1) {
+      errors.push(`${family.id} changed-chain variant must differ by one DNA base`)
     }
-    if (countDifferences(normal.mrna, variant.mrna) !== 1) {
-      errors.push(`${pair.id} normal and variant orders must differ by exactly one mRNA base`)
+    if (family.original.aminoAcidChain.join('|') !== family.sameChainVariant.aminoAcidChain.join('|')) {
+      errors.push(`${family.id} same-chain variant changes the amino acid chain`)
     }
-    if (normal.mrna[pair.changedMrnaIndex] === variant.mrna[pair.changedMrnaIndex]) {
-      errors.push(`${pair.id} changedMrnaIndex does not identify the changed base`)
+    if (family.original.functionRowId !== family.sameChainVariant.functionRowId) {
+      errors.push(`${family.id} same-chain variant changes the function row`)
     }
-
-    ;[pair.normal, pair.variant].forEach((order) => {
-      const sequence = order.sequence
-      if (sequence.mrna !== sequence.mrnaCodons.join('')) errors.push(`${order.id} mRNA does not match its codons`)
-      if (sequence.codingDna !== sequence.mrna.replaceAll('U', 'T')) errors.push(`${order.id} coding DNA does not match mRNA`)
-      if (sequence.templateDna !== complementDna(sequence.codingDna)) errors.push(`${order.id} template DNA is not complementary`)
-      if (sequence.translatedSlots.join('|') !== translateCodons(sequence.mrnaCodons).join('|')) {
-        errors.push(`${order.id} translated slots do not match the codon map`)
-      }
-    })
-
-    if (pair.effect === 'no-change' && normal.proteinChain.join('|') !== variant.proteinChain.join('|')) {
-      errors.push(`${pair.id} no-change pair changes the amino-acid chain`)
+    const aminoAcidDifferences = countArrayDifferences(
+      family.original.aminoAcidChain,
+      family.changedChainVariant.aminoAcidChain,
+    )
+    if (aminoAcidDifferences !== 1) errors.push(`${family.id} changed-chain variant must change one amino acid`)
+    if (family.original.functionRowId === family.changedChainVariant.functionRowId) {
+      errors.push(`${family.id} changed-chain variant must change the function row`)
     }
-    if (pair.effect === 'amino-acid-change' && normal.proteinChain.join('|') === variant.proteinChain.join('|')) {
-      errors.push(`${pair.id} amino-acid-change pair does not change the chain`)
-    }
-    if (pair.effect === 'early-stop' && variant.proteinChain.length >= normal.proteinChain.length) {
-      errors.push(`${pair.id} early-stop variant does not shorten the chain`)
-    }
-  })
-
-  Object.entries(effectCounts).forEach(([effect, count]) => {
-    if (count !== 2) errors.push(`Expected 2 ${effect} pairs, received ${count}`)
   })
   return errors
 }
 
-export function validateContent(manifest: RunManifest = defaultRunManifest): string[] {
-  const errors = validateProteinOrderPairs()
+export function validateContent(manifest: RunManifestV4 = defaultRunManifest): string[] {
+  const errors = validateProteinSequenceFamilies()
   const ids = new Set<string>()
+  if (manifest.rounds.length !== stagesPerRun) errors.push(`Run must contain ${stagesPerRun} actions`)
+  if (manifest.sequenceIds.length !== sequencesPerRun) errors.push('Run must contain three protein sequences')
 
-  if (manifest.rounds.length !== stagesPerRun) errors.push(`Run must contain ${stagesPerRun} stages`)
-  manifest.rounds.forEach((round) => {
+  manifest.rounds.forEach((round, index) => {
     if (ids.has(round.id)) errors.push(`Duplicate round id: ${round.id}`)
     ids.add(round.id)
-    if (round.context.pairId !== manifest.pairId) errors.push(`${round.id} does not belong to manifest pair`)
-    if ((round.type === 'dna' || round.type === 'transcription') && round.answer.length !== round.template.length) {
-      errors.push(`${round.id} answer length does not match template length`)
+    if (round.context.familyId !== manifest.familyId) errors.push(`${round.id} does not belong to manifest family`)
+    if (round.context.sequenceIndex !== Math.floor(index / actionsPerSequence)) {
+      errors.push(`${round.id} has the wrong sequence index`)
+    }
+    if (round.type === 'transcription' && round.answer.length !== round.template.length) {
+      errors.push(`${round.id} answer length does not match the DNA strand`)
     }
     if (round.type === 'translation') {
-      if (round.codons.length !== 4 || round.answers.length !== 4 || round.codonChoices.length !== 4) {
-        errors.push(`${round.id} translation data must contain four slots`)
+      if (round.codons.length !== 5 || round.answers.length !== 5 || round.codonChoices.length !== 5) {
+        errors.push(`${round.id} translation data must contain five codons`)
       }
-      round.answers.forEach((answer, index) => {
-        if (!round.codonChoices[index].includes(answer)) errors.push(`${round.id} choices missing ${answer}`)
+      round.answers.forEach((answer, answerIndex) => {
+        if (!round.codonChoices[answerIndex].includes(answer)) errors.push(`${round.id} choices are missing ${answer}`)
       })
     }
-    if (round.type === 'protein' && !round.options.some((option) => option.trait === round.correctTrait)) {
-      errors.push(`${round.id} has no correct function option`)
+    if (round.type === 'protein' && !round.referenceRows.some((row) => row.id === round.correctRowId)) {
+      errors.push(`${round.id} has no matching function row`)
     }
   })
   return errors
 }
 
-function createPair(
-  id: string,
-  effect: MutationEffect,
-  normalCodons: [string, string, string, string],
-  variantCodons: [string, string, string, string],
-  changedMrnaIndex: number,
-): ProteinOrderPair {
-  return {
-    id,
-    effect,
-    changedMrnaIndex,
-    normal: createOrder(`${id}-normal`, `${id} normal order`, 'normal', normalCodons, usualFunction),
-    variant: createOrder(
-      `${id}-variant`,
-      `${id} linked order`,
-      'one-base-variant',
-      variantCodons,
-      effect === 'no-change' ? usualFunction : effect === 'amino-acid-change' ? changedFunction : earlyStopFunction,
-    ),
-  }
-}
-
-function createOrder(
+function createFamily(
   id: string,
   name: string,
-  role: ProteinOrder['role'],
-  mrnaCodons: [string, string, string, string],
-  functionOutcome: string,
-): ProteinOrder {
-  const mrna = mrnaCodons.join('')
-  const codingDna = mrna.replaceAll('U', 'T')
-  const translatedSlots = translateCodons(mrnaCodons)
-  const firstStop = translatedSlots.indexOf('Stop')
-  const proteinChain = translatedSlots.slice(0, firstStop === -1 ? translatedSlots.length : firstStop)
+  originalCodons: FiveCodons,
+  sameChainCodons: FiveCodons,
+  changedChainCodons: FiveCodons,
+  originalFunctionRowId: string,
+  changedFunctionRowId: string,
+): ProteinSequenceFamily {
+  const original = createSequence(`${id}-original`, 'original', 'original', originalCodons, originalFunctionRowId, null)
+  const sameChainVariant = createVariantSequence(
+    `${id}-same`, 'same-chain-variant', 'same-chain', sameChainCodons, originalFunctionRowId, original,
+  )
+  const changedChainVariant = createVariantSequence(
+    `${id}-changed`, 'changed-chain-variant', 'amino-acid-change', changedChainCodons, changedFunctionRowId, original,
+  )
+  return { id, name, original, sameChainVariant, changedChainVariant }
+}
 
+function createVariantSequence(
+  id: string,
+  role: SequenceRole,
+  effect: MutationEffect,
+  codons: FiveCodons,
+  functionRowId: string,
+  original: ProteinSequence,
+): ProteinSequence {
+  const sequence = createSequence(id, role, effect, codons, functionRowId, null)
+  return { ...sequence, changedDnaIndex: firstDifference(original.dnaStrand, sequence.dnaStrand) }
+}
+
+function createSequence(
+  id: string,
+  role: SequenceRole,
+  effect: ProteinSequence['effect'],
+  mrnaCodons: FiveCodons,
+  functionRowId: string,
+  changedDnaIndex: number | null,
+): ProteinSequence {
+  const translatedSignals = mrnaCodons.map(translateCodon) as ProteinSequence['translatedSignals']
+  const aminoAcidChain = translatedSignals.slice(0, 4) as ProteinSequence['aminoAcidChain']
+  const mrna = mrnaCodons.join('')
   return {
     id,
-    name,
     role,
-    sequence: {
-      codingDna,
-      templateDna: complementDna(codingDna),
-      mrna,
-      mrnaCodons: [...mrnaCodons],
-      translatedSlots,
-      proteinChain,
-      functionOutcome,
-    },
+    effect,
+    dnaStrand: dnaTemplateForMrna(mrna),
+    mrna,
+    mrnaCodons: [...mrnaCodons],
+    translatedSignals,
+    aminoAcidChain,
+    functionRowId,
+    changedDnaIndex,
   }
 }
 
-function translateCodons(codons: [string, string, string, string]): [string, string, string, string] {
-  let stopped = false
-  return codons.map((codon) => {
-    if (stopped) return 'Not translated'
-    const aminoAcid = codonMap[codon] ?? 'Unknown'
-    if (aminoAcid === 'Stop') stopped = true
-    return aminoAcid
-  }) as [string, string, string, string]
+function validateSequence(sequence: ProteinSequence, errors: string[]): void {
+  if (sequence.mrna.length !== 15 || sequence.dnaStrand.length !== 15) {
+    errors.push(`${sequence.id} must contain 15 DNA and mRNA bases`)
+  }
+  if (sequence.mrnaCodons[0] !== 'AUG') errors.push(`${sequence.id} must begin with AUG`)
+  if (sequence.translatedSignals[0] !== 'Met') errors.push(`${sequence.id} must begin with Met`)
+  if (sequence.translatedSignals[4] !== 'Stop') errors.push(`${sequence.id} must end with Stop`)
+  if (sequence.translatedSignals.slice(0, 4).includes('Stop')) errors.push(`${sequence.id} contains an early Stop`)
+  if (sequence.dnaStrand !== dnaTemplateForMrna(sequence.mrna)) errors.push(`${sequence.id} DNA does not transcribe to mRNA`)
+  if (sequence.mrna !== sequence.mrnaCodons.join('')) errors.push(`${sequence.id} mRNA does not match its codons`)
+  if (sequence.aminoAcidChain.join('|') !== sequence.translatedSignals.slice(0, 4).join('|')) {
+    errors.push(`${sequence.id} amino acid chain does not match translation`)
+  }
+  const functionRow = functionRowsById.get(sequence.functionRowId)
+  if (!functionRow) errors.push(`${sequence.id} has an unknown function row`)
+  else if (functionRow.aminoAcidSequence.join('|') !== sequence.aminoAcidChain.join('|')) {
+    errors.push(`${sequence.id} chain does not match function row ${functionRow.id}`)
+  }
 }
 
-function complementDna(sequence: string): string {
-  const pairs: Record<string, string> = { A: 'T', T: 'A', C: 'G', G: 'C' }
-  return [...sequence].map((base) => pairs[base] ?? '?').join('')
+function dnaTemplateForMrna(mrna: string): string {
+  const pairs: Record<string, string> = { A: 'T', U: 'A', C: 'G', G: 'C' }
+  return [...mrna].map((base) => pairs[base] ?? '?').join('')
 }
 
-function buildCodonChoices(answer: string): string[] {
-  const distractors = answer === 'Not translated' ? ['Ala', 'Stop', 'Met'] : answer === 'Stop' ? ['Trp', 'Gln', 'Not translated'] : ['Met', 'Ala', 'Val', 'Lys', 'Phe', 'Gly', 'Arg', 'Trp', 'Tyr', 'Gln', 'Stop']
-  return [answer, ...distractors.filter((choice) => choice !== answer)].slice(0, 4)
+function buildCodonChoices(answer: TranslationSignal, index: number): string[] {
+  if (answer === 'Stop') return ['Stop', 'Trp', 'Gln', 'Met']
+  const distractorSets = [
+    ['Met', 'Ile', 'Val', 'Leu'],
+    ['Ala', 'Val', 'Thr', 'Ser'],
+    ['Tyr', 'His', 'Phe', 'Gln'],
+    ['Gly', 'Asp', 'Ala', 'Val'],
+  ]
+  return [answer, ...distractorSets[index % distractorSets.length].filter((choice) => choice !== answer)].slice(0, 4)
 }
 
 function expectedForRound(round: GameRound): string {
-  if (round.type === 'dna' || round.type === 'transcription') return round.answer
+  if (round.type === 'transcription') return round.answer
   if (round.type === 'translation') return round.answers.join('-')
-  return 'correctTrait' in round ? round.correctTrait : ''
+  return round.correctRowId
 }
 
 function transferChoices(round: GameRound, expected: string): string[] {
-  if (round.type === 'protein') return round.options.map((option) => option.trait)
+  if (round.type === 'protein') return round.referenceRows.map((row) => row.id)
   if (round.type === 'translation') {
-    const alternatives = [
-      round.answers.map((answer, index) => (index === 1 ? 'Val' : answer)).join('-'),
-      round.answers.map((answer, index) => (index === 2 ? 'Stop' : answer)).join('-'),
-      round.context.sequence.proteinChain.join('-'),
-    ]
-    return [...new Set([expected, ...alternatives])].slice(0, 4)
+    const alternatives = round.codonChoices[0].slice(1).map((choice) => [choice, ...round.answers.slice(1)].join('-'))
+    return [expected, ...alternatives].slice(0, 4)
   }
-  const alphabet = round.type === 'dna' ? ['A', 'T', 'C', 'G'] : ['A', 'U', 'C', 'G']
-  const alternatives = alphabet
-    .filter((base) => base !== expected[0])
-    .map((base) => `${base}${expected.slice(1)}`)
+  const alternatives = ['A', 'U', 'C', 'G'].filter((base) => base !== expected[0]).map((base) => `${base}${expected.slice(1)}`)
   return [expected, ...alternatives].slice(0, 4)
 }
 
-function categoryForStage(stage: ProductionStage): MisconceptionCategory {
-  if (stage === 'dna-assembly') return 'dna-base-pairing'
-  if (stage === 'transcription') return 'rna-template-pairing'
-  if (stage === 'translation') return 'codon-lookup'
+function categoryForStage(action: ProductionAction): MisconceptionCategory {
+  if (action === 'transcription') return 'rna-template-pairing'
+  if (action === 'translation') return 'codon-lookup'
   return 'protein-trait-model'
+}
+
+function skillLabelForStage(action: ProductionAction): string {
+  if (action === 'transcription') return 'Transcribe DNA into complementary mRNA'
+  if (action === 'translation') return 'Translate mRNA codons into amino-acid signals'
+  return 'Use an amino-acid chain to identify protein function'
+}
+
+function evidencePromptForRound(round: GameRound): string {
+  if (round.type === 'transcription') return 'New DNA strand'
+  if (round.type === 'translation') return 'New mRNA codons'
+  return 'New amino-acid chain and function table'
+}
+
+function transferStimulus(round: GameRound): TransferTask['stimulus'] {
+  if (round.type === 'transcription') {
+    return { dnaTemplate: round.template, kind: 'transcription' }
+  }
+  if (round.type === 'translation') {
+    return { kind: 'translation', mrnaCodons: [...round.codons] }
+  }
+  return {
+    aminoAcidChain: [...round.context.sequence.aminoAcidChain],
+    kind: 'function-test',
+    referenceRows: round.referenceRows.map((row) => ({
+      ...row,
+      aminoAcidSequence: [...row.aminoAcidSequence],
+    })),
+  }
+}
+
+function correctiveFeedbackForStage(action: ProductionAction): string {
+  if (action === 'transcription') {
+    return 'Pair each DNA base with its complementary RNA base: A-U, T-A, C-G, and G-C.'
+  }
+  if (action === 'translation') {
+    return 'Read each mRNA codon in order, translate one codon at a time, and treat Stop as a signal rather than an amino acid.'
+  }
+  return 'Match all four amino acids to one table row, then use the function and trait from that same row.'
+}
+
+function firstDifference(left: string, right: string): number | null {
+  const index = [...left].findIndex((value, position) => value !== right[position])
+  return index === -1 ? null : index
 }
 
 function countDifferences(left: string, right: string): number {
   if (left.length !== right.length) return Number.POSITIVE_INFINITY
   return [...left].reduce((count, value, index) => count + (value === right[index] ? 0 : 1), 0)
+}
+
+function countArrayDifferences(left: readonly string[], right: readonly string[]): number {
+  if (left.length !== right.length) return Number.POSITIVE_INFINITY
+  return left.reduce((count, value, index) => count + (value === right[index] ? 0 : 1), 0)
 }
 
 function hashSeed(seed: string): number {

@@ -1,11 +1,8 @@
-import { Dna, Volume2, VolumeX } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
-import { stationForRoundType } from '../game/content/rounds'
+import { Check, CircleDot, Dna, FlaskConical, Volume2, VolumeX } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GameAction } from '../game/simulation/gameReducer'
-import { selectReplayChallengeStatus } from '../game/simulation/gameReducer'
 import { buildFactorySceneState } from '../render/adapters/sceneState'
-import { selectScore } from '../results/gameResults'
-import type { GameSessionState, ProteinOption, StationId } from '../types'
+import type { GameSessionState, MolecularState, ProductSnapshot, ProductionAction } from '../types'
 import { CodonWheel } from './CodonWheel'
 import { FactoryCanvas } from './FactoryCanvas'
 import { TaskDock } from './TaskDock'
@@ -15,108 +12,93 @@ interface FactoryPlayScreenProps {
   state: GameSessionState
 }
 
+const molecularSteps: Array<{ kind: 'state' | 'action'; id: MolecularState | ProductionAction; label: string }> = [
+  { kind: 'state', id: 'dna', label: 'DNA' },
+  { kind: 'action', id: 'transcription', label: 'Transcription' },
+  { kind: 'state', id: 'mrna', label: 'mRNA' },
+  { kind: 'action', id: 'translation', label: 'Translation' },
+  { kind: 'state', id: 'amino-acid-chain', label: 'Amino acid chain' },
+  { kind: 'action', id: 'function-test', label: 'Function Test' },
+  { kind: 'state', id: 'protein-function', label: 'Protein function' },
+]
+
 export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
   const rounds = state.runManifest.rounds
   const currentRound = rounds[state.currentRoundIndex]
-  const activeStation = stationForRoundType(currentRound.type)
-  const score = selectScore(state.roundResults)
-  const localStatus = state.saveStatus === 'failed-local'
-    ? 'Device storage unavailable'
-    : state.saveStatus === 'saved-local'
-      ? 'Saved on this device'
-      : 'Practice on this device'
-  const replayChallenge = selectReplayChallengeStatus(state)
-  const sceneState = useMemo(() => buildFactorySceneState(state), [state])
   const [soundEnabled, setSoundEnabled] = useState(state.settings.soundEnabled)
-  const onStationSelect = useCallback(
-    (stationId: StationId) => dispatch({ type: 'SELECT_STATION', stationId }),
-    [dispatch],
-  )
+  const proteinNumber = currentRound.context.sequenceIndex + 1
+  const actionNumber = currentRound.context.action === 'transcription' ? 1 : currentRound.context.action === 'translation' ? 2 : 3
+  const activeRailIndex = actionNumber === 1 ? 1 : actionNumber === 2 ? 3 : 5
+  const completedActions = state.roundResults.length
+  const sceneState = buildFactorySceneState(state)
+  const handleStationSelect = useCallback(() => undefined, [])
+  const nextSequence = rounds[state.currentRoundIndex + 1]?.context.sequence
+  const originalSequence = rounds[0].context.sequence
+  const changedIndex = nextSequence?.changedDnaIndex ?? null
+  const feedback = state.feedback
+  const wheelLaunchRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    if (!soundEnabled || !feedback || feedback.kind === 'info') return undefined
+    try {
+      const audioContext = new AudioContext()
+      const oscillator = audioContext.createOscillator()
+      const gain = audioContext.createGain()
+      oscillator.frequency.value = feedback.kind === 'success' ? 660 : 220
+      gain.gain.setValueAtTime(0.0001, audioContext.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.08, audioContext.currentTime + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.18)
+      oscillator.connect(gain).connect(audioContext.destination)
+      oscillator.start()
+      oscillator.stop(audioContext.currentTime + 0.2)
+      oscillator.addEventListener('ended', () => void audioContext.close(), { once: true })
+    } catch {
+      // Sound is optional; gameplay remains fully usable when audio is blocked.
+    }
+    return undefined
+  }, [feedback, soundEnabled])
 
   return (
-    <main className="factory-play" data-testid="factory-play">
-      <FactoryCanvas sceneState={sceneState} onStationSelect={onStationSelect} />
-
-      <div className={`factory-hud ${state.taskDockOpen ? 'task-open' : ''}`} aria-label="Factory status">
-        <section className="hud-cluster top-left">
-          <div className="hud-chip objective-chip">
-            <Dna aria-hidden="true" size={20} />
-            <div>
-              <span>
-                Round {state.currentRoundIndex + 1}/{rounds.length}
-              </span>
-              <strong>{sceneState.activeStationLabel}</strong>
-            </div>
-          </div>
-          <div className="round-pips" aria-label="Round progress">
-            {rounds.map((round, index) => (
-              <span
-                aria-label={`Round ${index + 1} ${index < state.currentRoundIndex ? 'complete' : 'pending'}`}
-                className={index < state.currentRoundIndex ? 'complete' : index === state.currentRoundIndex ? 'current' : ''}
-                key={round.id}
-              />
-            ))}
-          </div>
-        </section>
-
-        <section className="hud-cluster top-right">
+    <main className={`factory-play ${currentRound.type} ${state.isCodonWheelOpen ? 'wheel-open' : ''}`} data-testid="factory-play">
+      <FactoryCanvas onStationSelect={handleStationSelect} sceneState={sceneState} />
+      <header className="workbench-header">
+        <div className="protein-counter">
+          <span className="brand-mini"><Dna aria-hidden="true" size={20} /></span>
+          <div><strong>Protein {proteinNumber} of 3</strong><span>Action {actionNumber} of 3</span></div>
+        </div>
+        <ProcessRail activeIndex={activeRailIndex} />
+        <div className="run-tools">
+          <span className="stage-score"><b>{completedActions}</b>/9 complete</span>
           <button
             aria-label={soundEnabled ? 'Mute sound' : 'Turn on sound'}
             aria-pressed={soundEnabled}
             className="icon-button sound-toggle"
-            onClick={() => setSoundEnabled((current) => !current)}
+            onClick={() => setSoundEnabled((value) => !value)}
             title={soundEnabled ? 'Mute sound' : 'Turn on sound'}
             type="button"
           >
             {soundEnabled ? <Volume2 aria-hidden="true" size={20} /> : <VolumeX aria-hidden="true" size={20} />}
           </button>
-          <div className="hud-chip run-status-chip">
-            <span>Run status</span>
-            <strong>
-              {score}/{rounds.length}
-            </strong>
-            <small>{localStatus}</small>
-          </div>
-          {replayChallenge && (
-            <div className="hud-chip challenge-chip">
-              <span>Replay challenge</span>
-              <strong>{replayChallenge.replace('Replay challenge: ', '')}</strong>
-            </div>
-          )}
-        </section>
+        </div>
+      </header>
 
-        {!state.taskDockOpen && (
-          <section className="interaction-prompt">
-            <div>
-              <small>Current lab action</small>
-              <strong>{sceneState.activeStationLabel}</strong>
-              <span>{currentRound.prompt}</span>
-            </div>
-            <button
-              className="primary-action compact"
-              onClick={() => dispatch({ type: 'OPEN_ACTIVE_STATION' })}
-              type="button"
-            >
-              Start {activeStation.shortTitle}
-            </button>
-          </section>
-        )}
-      </div>
+      {state.saveStatus === 'failed-local' && (
+        <p className="storage-alert" data-testid="storage-warning" role="alert">
+          Device storage unavailable. Keep this tab open until your run is finished.
+        </p>
+      )}
 
-      {state.taskDockOpen && (
+      <section className={`workbench-grid ${currentRound.type === 'translation' && state.isCodonWheelOpen ? 'wheel-expanded' : ''}`}>
         <TaskDock
           feedback={state.feedback}
           onAppendBase={(base) => dispatch({ type: 'APPEND_BASE', base })}
           onBackspace={() => dispatch({ type: 'BACKSPACE' })}
           onCheckBaseRound={() => dispatch({ type: 'CHECK_BASE_ROUND' })}
-          onCheckFullTranslation={() => dispatch({ type: 'CHECK_FULL_TRANSLATION' })}
-          onCheckProtein={() => dispatch({ type: 'CHECK_PROTEIN' })}
+          onCheckFunctionTest={() => dispatch({ type: 'CHECK_FUNCTION_ROW' })}
           onCheckTranslationCodon={() => dispatch({ type: 'CHECK_TRANSLATION_CODON' })}
           onClear={() => dispatch({ type: 'CLEAR_INPUT' })}
-          onClose={() => dispatch({ type: 'CLOSE_TASK_DOCK' })}
           onGoToTranslationCodon={(index) => dispatch({ type: 'GO_TO_TRANSLATION_CODON', index })}
-          onOpenCodonWheel={() => dispatch({ type: 'OPEN_CODON_WHEEL' })}
-          onSelectProtein={(option: ProteinOption) => dispatch({ type: 'SELECT_PROTEIN', option })}
+          onSelectFunctionRow={(rowId) => dispatch({ type: 'SELECT_FUNCTION_ROW', rowId })}
           onSelectTranslation={(index, value) => dispatch({ type: 'SELECT_TRANSLATION', index, value })}
           onToggleHint={() => dispatch({ type: 'TOGGLE_HINT' })}
           round={currentRound}
@@ -124,27 +106,93 @@ export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
           roundState={state.roundState}
           totalRounds={rounds.length}
         />
-      )}
 
-      <CodonWheel
-        activeCodonIndex={currentRound.type === 'translation' ? state.roundState.currentCodonIndex : 0}
-        codons={currentRound.type === 'translation' ? currentRound.codons : []}
-        isOpen={state.isCodonWheelOpen}
-        onClose={() => dispatch({ type: 'CLOSE_CODON_WHEEL' })}
-      />
+        {currentRound.type === 'translation' && (
+          <>
+            <button
+              aria-haspopup="dialog"
+              className="secondary-action wheel-launch"
+              hidden={state.isCodonWheelOpen}
+              onClick={() => dispatch({ type: 'OPEN_CODON_WHEEL' })}
+              ref={wheelLaunchRef}
+              type="button"
+            >
+              <CircleDot aria-hidden="true" size={20} /> Open Codon Wheel
+            </button>
+            <CodonWheel
+              activeCodonIndex={state.roundState.currentCodonIndex}
+              codons={currentRound.codons}
+              isOpen={state.isCodonWheelOpen}
+              onClose={() => dispatch({ type: state.isCodonWheelOpen ? 'CLOSE_CODON_WHEEL' : 'OPEN_CODON_WHEEL' })}
+              returnFocusRef={wheelLaunchRef}
+            />
+          </>
+        )}
+      </section>
 
-      {state.screen === 'success' && state.feedback && (
-        <section className="shipment-overlay" role="status" data-testid="shipment-overlay">
+      <ComparisonTray products={state.completedProducts} />
+
+      {state.feedback?.kind === 'success' && (
+        <section className={`sequence-complete ${state.screen === 'sequence-transition' ? 'protein-complete' : ''}`} role="status" data-testid="shipment-overlay">
+          <span className="success-mark"><Check aria-hidden="true" size={23} /></span>
           <div>
-            <small>Production update</small>
+            <small>{state.screen === 'sequence-transition' ? `Protein ${proteinNumber} complete` : `Action ${actionNumber} complete`}</small>
             <strong>{state.feedback.title}</strong>
             <span>{state.feedback.message}</span>
+            {state.screen === 'sequence-transition' && nextSequence && changedIndex !== null && (
+              <span className="change-brief">
+                Next DNA change: position {changedIndex + 1} changes from {originalSequence.dnaStrand[changedIndex]} to {nextSequence.dnaStrand[changedIndex]}.
+              </span>
+            )}
           </div>
           <button className="primary-action compact" onClick={() => dispatch({ type: 'CONTINUE_AFTER_SUCCESS', now: Date.now() })} type="button">
-            {state.currentRoundIndex === rounds.length - 1 ? 'Finish order' : 'Continue production'}
+            {state.currentRoundIndex === rounds.length - 1 ? 'Finish run' : state.screen === 'sequence-transition' ? `Start Protein ${proteinNumber + 1}` : 'Next action'}
           </button>
         </section>
       )}
     </main>
   )
+}
+
+function ProcessRail({ activeIndex }: { activeIndex: number }) {
+  return (
+    <ol className="process-rail" aria-label="DNA to protein function process">
+      {molecularSteps.map((step, index) => (
+        <li
+          aria-current={index === activeIndex ? 'step' : undefined}
+          className={`${step.kind} ${index < activeIndex ? 'complete' : ''} ${index === activeIndex ? 'active' : ''}`}
+          key={step.id}
+        >
+          {step.kind === 'state' ? <span>{step.label}</span> : <><i aria-hidden="true" /><b>{step.label}</b></>}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function ComparisonTray({ products }: { products: ProductSnapshot[] }) {
+  return (
+    <section className="comparison-tray" aria-label="Completed protein comparison tray">
+      <div className="comparison-title"><FlaskConical aria-hidden="true" size={19} /><span>Completed products</span></div>
+      {Array.from({ length: 3 }, (_, index) => {
+        const product = products[index]
+        return product ? (
+          <article className="product-chip" key={product.sequenceId}>
+            <span>Protein {index + 1}</span>
+            <strong>{product.aminoAcidChain.join('-')}</strong>
+            <i className={`trait-swatch ${product.traitColor}`} aria-hidden="true" />
+            <small>{productSummary(product)} - {product.expressedTrait}</small>
+          </article>
+        ) : (
+          <div className="product-chip empty" key={`empty-${index}`}><span>Protein {index + 1}</span><strong>Waiting</strong></div>
+        )
+      })}
+    </section>
+  )
+}
+
+function productSummary(product: ProductSnapshot): string {
+  if (product.sequenceRole === 'original') return 'Baseline'
+  if (product.sequenceRole === 'same-chain-variant') return 'Same chain and function'
+  return 'One amino acid changed'
 }

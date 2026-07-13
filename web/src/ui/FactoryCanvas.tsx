@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { stationDefinitions } from '../game/content/rounds'
 import type { FactoryRuntime } from '../render/FactoryRuntime'
-import type { StationId } from '../types'
 import type { FactorySceneSnapshot } from '../render/adapters/sceneState'
+import type { StationId } from '../types'
 
 interface FactoryCanvasProps {
   sceneState: FactorySceneSnapshot
@@ -22,6 +21,7 @@ export function FactoryCanvas({ sceneState, onStationSelect }: FactoryCanvasProp
 
     let cancelled = false
     const container = containerRef.current
+    setHasRuntimeError(false)
     void import('../render/FactoryRuntime').then(({ FactoryRuntime: Runtime }) => {
       if (cancelled) return
       try {
@@ -29,17 +29,14 @@ export function FactoryCanvas({ sceneState, onStationSelect }: FactoryCanvasProp
           container,
           onContextLost: () => setHasRuntimeError(true),
           onContextRestored: () => setHasRuntimeError(false),
-          onStationSelect,
         })
         runtime.setState(sceneStateRef.current)
         runtimeRef.current = runtime
         setHasRuntimeError(false)
-      } catch (error) {
-        console.warn(error)
+      } catch {
         setHasRuntimeError(true)
       }
-    }).catch((error) => {
-      console.warn(error)
+    }).catch(() => {
       setHasRuntimeError(true)
     })
 
@@ -56,17 +53,23 @@ export function FactoryCanvas({ sceneState, onStationSelect }: FactoryCanvasProp
   }, [sceneState])
 
   return (
-    <div ref={containerRef} className="factory-canvas-host" data-testid="factory-canvas">
+    <div
+      aria-label={`${sceneState.cargoLabel}. ${sceneState.activeStationLabel}`}
+      aria-live="polite"
+      className="factory-canvas-host"
+      data-action={sceneState.activeAction}
+      data-sequence-index={sceneState.sequenceIndex}
+      data-testid="factory-canvas"
+      ref={containerRef}
+    >
       {hasRuntimeError && (
         <div className="factory-fallback" role="status">
           <strong>Cell lab view paused</strong>
           <span>Your work is safe. Use the active lab button to continue.</span>
           <div>
-            {stationDefinitions.filter((station) => station.id === sceneState.activeStationId).map((station) => (
-              <button key={station.id} onClick={() => onStationSelect(station.id)} type="button">
-                {station.title}
-              </button>
-            ))}
+            <button onClick={() => onStationSelect(sceneState.activeStationId)} type="button">
+              Continue {sceneState.activeStationLabel}
+            </button>
           </div>
         </div>
       )}
