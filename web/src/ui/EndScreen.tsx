@@ -53,7 +53,7 @@ export function EndScreen({ navigationBlocked, payload, saveResult, onReplay, on
               <p className="eyebrow">Baseline evidence only</p>
               <h2 id="baseline-title">Original 9-stage factory run was not repeated</h2>
             </div>
-            <span className={submissionClass(submissionStatus, saveResult)}>{submissionLabel(submissionStatus, saveResult)}</span>
+            <span aria-live="polite" className={submissionClass(submissionStatus, saveResult)}>{submissionLabel(submissionStatus, saveResult)}</span>
           </div>
           <p><strong>Original attempt:</strong> {payload.parentAttemptId ?? 'Unavailable'}</p>
           <dl className="score-grid">
@@ -74,7 +74,7 @@ export function EndScreen({ navigationBlocked, payload, saveResult, onReplay, on
             <button className="primary-action" disabled={navigationBlocked} onClick={onReplay} type="button"><RotateCcw aria-hidden="true" size={21} /> Replay</button>
             <button className="secondary-action" disabled={navigationBlocked} onClick={onRestart} type="button"><Home aria-hidden="true" size={21} /> New student</button>
           </div>
-          {navigationBlocked && <p role="alert">Export this result or choose Leave without saving before starting another run.</p>}
+          {navigationBlocked && <p className="end-navigation-alert" role="alert">Export this result or choose Leave without saving before starting another run.</p>}
         </section>
 
         <details className="teacher-results">
@@ -129,7 +129,7 @@ export function EndScreen({ navigationBlocked, payload, saveResult, onReplay, on
         <section className="end-products" aria-labelledby="products-title">
           <div className="end-section-title">
             <div><p className="eyebrow">Comparison tray</p><h2 id="products-title">Your three protein products</h2></div>
-            <span className={submissionClass(submissionStatus, saveResult)}>{submissionLabel(submissionStatus, saveResult)}</span>
+            <span aria-live="polite" className={submissionClass(submissionStatus, saveResult)}>{submissionLabel(submissionStatus, saveResult)}</span>
           </div>
           <div className="product-results">
             {payload.completedProducts.map((product, index) => (
@@ -163,7 +163,7 @@ export function EndScreen({ navigationBlocked, payload, saveResult, onReplay, on
             <button className="primary-action" disabled={navigationBlocked} onClick={onReplay} type="button"><RotateCcw aria-hidden="true" size={21} /> Replay</button>
             <button className="secondary-action" disabled={navigationBlocked} onClick={onRestart} type="button"><Home aria-hidden="true" size={21} /> New student</button>
           </div>
-          {navigationBlocked && <p role="alert">Export this result or choose Leave without saving before starting another run.</p>}
+          {navigationBlocked && <p className="end-navigation-alert" role="alert">Export this result or choose Leave without saving before starting another run.</p>}
         </section>
       </section>
 

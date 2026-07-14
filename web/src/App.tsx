@@ -16,6 +16,9 @@ type RecoveryChoice = 'prompt' | 'resume' | 'start-over'
 
 function App() {
   const [checkpoint, setCheckpoint] = useState<CheckpointEnvelopeV4 | null>(null)
+  const [confirmStartOver, setConfirmStartOver] = useState(false)
+  const deleteSavedRunRef = useRef<HTMLButtonElement | null>(null)
+  const startOverRef = useRef<HTMLButtonElement | null>(null)
   const [hasLegacyCheckpoint, setHasLegacyCheckpoint] = useState(false)
   const [recoveryChoice, setRecoveryChoice] = useState<RecoveryChoice>('start-over')
   const [repositoryReady, setRepositoryReady] = useState(false)
@@ -51,6 +54,10 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (confirmStartOver) deleteSavedRunRef.current?.focus()
+  }, [confirmStartOver])
+
   if (!repositoryReady) {
     return <main className="start-screen" aria-busy="true"><p role="status">Opening saved factory work...</p></main>
   }
@@ -79,28 +86,53 @@ function App() {
   }
 
   if (checkpoint && recoveryChoice === 'prompt') {
+    const savedRound = checkpoint.state.runManifest.rounds[checkpoint.state.currentRoundIndex]
+    const savedProtein = (savedRound?.context.sequenceIndex ?? 0) + 1
+    const savedAction = savedRound?.context.action === 'transcription'
+      ? 'Transcription'
+      : savedRound?.context.action === 'translation'
+        ? 'Translation'
+        : 'Function Test'
     return (
       <main className="start-screen" data-testid="recovery-screen">
         <section className="start-hero" aria-labelledby="recovery-title">
           <p className="eyebrow">Saved factory run found</p>
           <h1 id="recovery-title">Continue where you left off?</h1>
           <p className="start-copy">Your progress is stored on this device.</p>
+          <p className="recovery-summary">
+            <strong>{checkpoint.state.identity.firstName}</strong>
+            <span>Period {checkpoint.state.identity.period}</span>
+            <span>Protein {savedProtein} of 3</span>
+            <span>{savedAction}</span>
+          </p>
           <div className="end-actions">
             <button className="primary-action" onClick={() => setRecoveryChoice('resume')} type="button">
               Resume
             </button>
-            <button
-              className="secondary-action"
-              onClick={() => {
-                void submissionCoordinator.clearCheckpoint()
-                setCheckpoint(null)
-                setRecoveryChoice('start-over')
-                setSessionKey((value) => value + 1)
-              }}
-              type="button"
-            >
-              Start Over
-            </button>
+            {!confirmStartOver ? (
+              <button className="secondary-action" onClick={() => setConfirmStartOver(true)} ref={startOverRef} type="button">Start Over</button>
+            ) : (
+              <div aria-label="Confirm deleting saved run" className="start-over-confirmation" role="group">
+                <button
+                  className="secondary-action danger-action"
+                  onClick={() => {
+                    void submissionCoordinator.clearCheckpoint()
+                    setCheckpoint(null)
+                    setRecoveryChoice('start-over')
+                    setConfirmStartOver(false)
+                    setSessionKey((value) => value + 1)
+                  }}
+                  ref={deleteSavedRunRef}
+                  type="button"
+                >
+                  Delete saved run
+                </button>
+                <button className="secondary-action" onClick={() => {
+                  setConfirmStartOver(false)
+                  window.requestAnimationFrame(() => startOverRef.current?.focus())
+                }} type="button">Cancel</button>
+              </div>
+            )}
           </div>
         </section>
       </main>
@@ -150,6 +182,11 @@ function GameSession({ initialState, onCheckpointCleared, onRecoveryImported }: 
     setRecoveryMessage('')
     setSaveResult(null)
   }, [state.attemptId])
+
+  useEffect(() => {
+    if (state.screen !== 'end') return
+    window.scrollTo({ left: 0, top: 0, behavior: 'instant' })
+  }, [state.screen])
 
   useEffect(() => {
     if (state.screen === 'start') {

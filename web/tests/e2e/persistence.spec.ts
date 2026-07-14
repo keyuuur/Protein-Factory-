@@ -32,6 +32,11 @@ test.describe('V4 checkpoint recovery', () => {
 
     await page.reload()
     await page.getByRole('button', { name: 'Start Over' }).click()
+    await expect(page.getByRole('button', { name: 'Delete saved run' })).toBeFocused()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByRole('button', { name: 'Start Over' })).toBeFocused()
+    await page.getByRole('button', { name: 'Start Over' }).click()
+    await page.getByRole('button', { name: 'Delete saved run' }).click()
     await expect(page.getByTestId('start-screen')).toBeVisible()
     expect(await page.evaluate(() => localStorage.getItem('pirate-protein-factory:last-checkpoint'))).toBeNull()
     issues.assertClean()

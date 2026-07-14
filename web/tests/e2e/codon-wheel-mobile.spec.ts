@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { beginRun, completeCurrentAction, continueAfterSuccess, currentRound } from './helpers'
+import { assertNoHorizontalOverflow, beginRun, completeCurrentAction, continueAfterSuccess, currentRound } from './helpers'
 
 async function reachTranslation(page: Parameters<typeof beginRun>[0]) {
   await page.goto('/')
@@ -32,6 +32,7 @@ test('mobile codon wheel is modal, pannable, focus-safe, and scroll-locked', asy
   await expect(close).toBeFocused()
   await expect.poll(async () => close.evaluate((button) => button.getBoundingClientRect().height)).toBeGreaterThanOrEqual(48)
   await expect.poll(() => page.evaluate(() => document.body.style.position)).toBe('fixed')
+  await expect.poll(() => page.evaluate(() => document.documentElement.style.overflow)).toBe('hidden')
   await assertDialogLayout(page)
 
   const viewportMetrics = await viewport.evaluate((element) => {
@@ -103,6 +104,59 @@ test('open mobile wheel closes cleanly when rotation crosses the presentation br
   await expect(inlineWheel).toHaveAttribute('data-open', 'false')
   await expect(inlineWheel.getByRole('button', { name: 'Enlarge codon wheel' })).toBeFocused()
   await expect.poll(() => page.evaluate(() => document.body.style.position)).toBe('')
+})
+
+test('active codon, page scroll, and focus survive wheel use and mobile rotation', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'phone-portrait', 'One mobile project is enough to cover rotation state restoration.')
+  await page.setViewportSize({ width: 390, height: 568 })
+  const round = await reachTranslation(page)
+  if (round.type !== 'translation') return
+
+  const dock = page.getByTestId('task-dock')
+  const firstChoice = dock.getByRole('group', { name: `Signals for ${round.codons[0]}` })
+    .getByRole('button', { exact: true, name: round.answers[0] })
+  await firstChoice.click()
+  await dock.getByRole('button', { name: 'Check codon' }).click()
+  const secondCodon = dock.locator('.codon-selector button').nth(1)
+  await expect(secondCodon).toHaveAttribute('aria-current', 'step')
+
+  await page.mouse.wheel(0, 900)
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+  const scrollBeforeOpen = await page.evaluate(() => window.scrollY)
+  const launch = page.getByRole('button', { name: 'Open Codon Wheel' })
+  await launch.click()
+
+  const dialog = page.getByTestId('codon-wheel-dialog')
+  const wheel = page.getByTestId('codon-wheel')
+  await expect(wheel).toHaveAttribute('data-active-codon', round.codons[1])
+  await expect(wheel.locator(`[data-ring="third-signal"][data-codon="${round.codons[1]}"]`)).toHaveAttribute('data-active', 'true')
+  await page.setViewportSize({ width: 568, height: 390 })
+  await expect(dialog).toBeVisible()
+  await assertDialogLayout(page)
+  await page.setViewportSize({ width: 390, height: 568 })
+  await expect(dialog).toBeVisible()
+  await assertDialogLayout(page)
+  await page.keyboard.press('Escape')
+
+  await expect(dialog).toBeHidden()
+  await expect(launch).toBeFocused()
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+  const restoredScroll = await page.evaluate(() => window.scrollY)
+  expect(restoredScroll).toBeLessThanOrEqual(scrollBeforeOpen)
+  expect(scrollBeforeOpen - restoredScroll).toBeLessThanOrEqual(80)
+  await expect(launch).toBeInViewport()
+  await expect.poll(() => page.evaluate(() => document.body.style.position)).toBe('')
+  await assertNoHorizontalOverflow(page)
+
+  const geometry = await page.evaluate(() => ({
+    bodyBottom: Math.round(document.body.getBoundingClientRect().bottom + window.scrollY),
+    documentHeight: document.documentElement.scrollHeight,
+    fixedTop: document.body.style.top,
+    viewportHeight: window.innerHeight,
+  }))
+  expect(geometry.fixedTop).toBe('')
+  expect(Math.abs(geometry.documentHeight - geometry.bodyBottom)).toBeLessThanOrEqual(1)
+  expect(geometry.documentHeight).toBeGreaterThanOrEqual(geometry.viewportHeight)
 })
 
 async function assertDialogLayout(page: Parameters<typeof beginRun>[0]) {

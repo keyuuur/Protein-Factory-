@@ -1,5 +1,5 @@
 import { Check, Eraser, Lightbulb, RotateCcw } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import type { Feedback, FunctionReferenceRow, GameRound, ProteinRound, RoundState, TranscriptionRound, TranslationRound } from '../types'
 
 export interface TaskCompletion {
@@ -51,9 +51,34 @@ export function TaskDock({
 }: TaskDockProps) {
   const visibleFeedback = feedback?.kind === 'error' ? feedback : null
   const feedbackRef = useRef<HTMLDivElement | null>(null)
+  const stableFeedbackScrollRef = useRef(typeof window === 'undefined' ? 0 : window.scrollY)
 
   useEffect(() => {
-    if (visibleFeedback) feedbackRef.current?.focus({ preventScroll: true })
+    if (visibleFeedback) return undefined
+    const rememberScroll = () => { stableFeedbackScrollRef.current = window.scrollY }
+    rememberScroll()
+    window.addEventListener('scroll', rememberScroll, { passive: true })
+    return () => window.removeEventListener('scroll', rememberScroll)
+  }, [visibleFeedback])
+
+  useEffect(() => {
+    if (!visibleFeedback) return undefined
+    const frame = window.requestAnimationFrame(() => {
+      const feedbackElement = feedbackRef.current
+      if (!feedbackElement) return
+      if (window.innerWidth > 700) {
+        window.scrollTo(0, stableFeedbackScrollRef.current)
+        return
+      }
+      const bounds = feedbackElement.getBoundingClientRect()
+      if (bounds.top >= 0 && bounds.bottom <= window.innerHeight) return
+      feedbackElement.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      })
+    })
+    return () => window.cancelAnimationFrame(frame)
   }, [visibleFeedback])
 
   return (
@@ -67,16 +92,11 @@ export function TaskDock({
         <p>{round.prompt}</p>
       </header>
 
-      {visibleFeedback && (
-        <div className={`inline-feedback ${visibleFeedback.kind}`} ref={feedbackRef} role="status" tabIndex={-1}>
-          <strong>{visibleFeedback.title}</strong>
-          <span>{visibleFeedback.detail ?? visibleFeedback.message}</span>
-        </div>
-      )}
-
       <fieldset className="task-content" disabled={Boolean(completion)}>
         {round.type === 'transcription' ? (
           <TranscriptionTask
+            feedback={visibleFeedback}
+            feedbackRef={feedbackRef}
             onAppendBase={onAppendBase}
             onBackspace={onBackspace}
             onCheck={onCheckBaseRound}
@@ -87,6 +107,8 @@ export function TaskDock({
           />
         ) : round.type === 'translation' ? (
           <TranslationTask
+            feedback={visibleFeedback}
+            feedbackRef={feedbackRef}
             onCheck={onCheckTranslationCodon}
             onGoToCodon={onGoToTranslationCodon}
             onSelect={onSelectTranslation}
@@ -96,6 +118,8 @@ export function TaskDock({
           />
         ) : (
           <FunctionTask
+            feedback={visibleFeedback}
+            feedbackRef={feedbackRef}
             onCheck={onCheckFunctionTest}
             onSelect={onSelectFunctionRow}
             onToggleHint={onToggleHint}
@@ -125,6 +149,8 @@ export function TaskDock({
 }
 
 function TranscriptionTask({
+  feedback,
+  feedbackRef,
   onAppendBase,
   onBackspace,
   onCheck,
@@ -133,6 +159,8 @@ function TranscriptionTask({
   round,
   roundState,
 }: {
+  feedback: Feedback | null
+  feedbackRef: RefObject<HTMLDivElement | null>
   onAppendBase: (base: string) => void
   onBackspace: () => void
   onCheck: () => void
@@ -169,6 +197,7 @@ function TranscriptionTask({
                 const mismatch = filled && base !== round.answer[index]
                 return (
                   <span
+                    aria-describedby={index === repairIndex && feedback ? 'task-repair-feedback' : undefined}
                     aria-label={`mRNA slot ${index + 1}${filled ? `, ${base}` : ', empty'}`}
                     className={`${index === repairIndex ? 'repair-target' : ''} ${mismatch ? 'mismatch' : ''} ${filled ? 'filled' : ''}`}
                     key={`rna-${index}`}
@@ -181,6 +210,8 @@ function TranscriptionTask({
           </div>
         ))}
       </div>
+
+      <InlineFeedback feedback={feedback} feedbackRef={feedbackRef} />
 
       <div className="sequence-labels" aria-hidden="true"><span>DNA</span><span>mRNA</span></div>
 
@@ -200,6 +231,8 @@ function TranscriptionTask({
 }
 
 function TranslationTask({
+  feedback,
+  feedbackRef,
   onCheck,
   onGoToCodon,
   onSelect,
@@ -207,6 +240,8 @@ function TranslationTask({
   round,
   roundState,
 }: {
+  feedback: Feedback | null
+  feedbackRef: RefObject<HTMLDivElement | null>
   onCheck: () => void
   onGoToCodon: (index: number) => void
   onSelect: (index: number, value: string) => void
@@ -216,7 +251,9 @@ function TranslationTask({
 }) {
   const activeIndex = roundState.currentCodonIndex
   const repairIndex = roundState.repairTarget?.kind === 'codon' ? roundState.repairTarget.index : -1
-  const currentChoice = roundState.pendingTranslationChoice || roundState.answers[activeIndex] || ''
+  const pendingChoice = roundState.pendingTranslationChoice
+  const confirmedChoice = roundState.answers[activeIndex] || ''
+  const currentChoice = pendingChoice || confirmedChoice
   const choices = roundState.narrowedChoices.length > 0 ? roundState.narrowedChoices : round.codonChoices[activeIndex]
   const firstOpen = roundState.answers.findIndex((answer) => !answer)
 
@@ -228,27 +265,46 @@ function TranslationTask({
           return (
             <button
               aria-current={index === activeIndex ? 'step' : undefined}
+              aria-describedby={index === repairIndex && feedback ? 'task-repair-feedback' : undefined}
               className={`${index === activeIndex ? 'active' : ''} ${roundState.answers[index] ? 'complete' : ''} ${index === repairIndex ? 'repair-target' : ''}`}
               disabled={locked}
               key={`${codon}-${index}`}
               onClick={() => onGoToCodon(index)}
               type="button"
             >
-              <span>{index + 1}</span><strong>{codon}</strong><small>{roundState.answers[index] || 'Open'}</small>
+              <span>{index + 1}</span>
+              <strong>{codon}</strong>
+              <small>
+                {roundState.answers[index]
+                  ? `${roundState.answers[index]} confirmed`
+                  : index === activeIndex && roundState.pendingTranslationChoice
+                    ? `${roundState.pendingTranslationChoice} selected, not checked`
+                    : 'Not checked'}
+              </small>
             </button>
           )
         })}
       </div>
 
+      <InlineFeedback feedback={feedback} feedbackRef={feedbackRef} />
+
       <div className="translation-focus">
         <div className="active-codon-card">
           <span>Codon {activeIndex + 1} of 5</span>
           <strong>{round.codons[activeIndex]}</strong>
+          <small>
+            {pendingChoice
+              ? `${pendingChoice} selected, not checked`
+              : confirmedChoice
+                ? `${confirmedChoice} confirmed`
+                : 'Choose a signal to check'}
+          </small>
         </div>
         <div className="translation-choices" role="group" aria-label={`Signals for ${round.codons[activeIndex]}`}>
           {choices.map((choice) => (
             <button
               aria-pressed={currentChoice === choice}
+              aria-label={`${choice}${currentChoice === choice ? pendingChoice ? ', selected but not checked' : ', confirmed' : ''}`}
               className={`answer-button ${currentChoice === choice ? 'selected' : ''}`}
               key={choice}
               onClick={() => onSelect(activeIndex, choice)}
@@ -258,7 +314,7 @@ function TranslationTask({
         </div>
       </div>
 
-      <div className="chain-builder" aria-label="Amino acid chain with four slots followed by a stop signal">
+      <div className="chain-builder" aria-label="Confirmed amino acid chain with four amino-acid slots and one stop-codon slot">
         <span className="chain-label">Chain</span>
         {Array.from({ length: 4 }, (_, index) => (
           <span className={`chain-slot ${roundState.answers[index] ? 'filled' : ''}`} key={`chain-${index}`}>
@@ -266,18 +322,20 @@ function TranslationTask({
           </span>
         ))}
         <i aria-hidden="true" />
-        <span className={`stop-slot ${roundState.answers[4] ? 'filled' : ''}`}><small>Stop codon</small><strong>{roundState.answers[4] || 'Stop'}</strong></span>
+        <span className={`stop-slot ${roundState.answers[4] ? 'filled' : ''}`}><small>Stop codon</small><strong>{roundState.answers[4] || '---'}</strong></span>
       </div>
 
       <div className="action-shelf translation-action">
         <HintBlock hint={round.hint} isOpen={roundState.showHint} onToggle={onToggleHint} />
-        <button className="primary-action" disabled={!currentChoice} onClick={onCheck} type="button"><Check aria-hidden="true" size={22} /> Check codon</button>
+        <button className="primary-action" disabled={!pendingChoice} onClick={onCheck} type="button"><Check aria-hidden="true" size={22} /> Check codon</button>
       </div>
     </div>
   )
 }
 
 function FunctionTask({
+  feedback,
+  feedbackRef,
   onCheck,
   onSelect,
   onToggleHint,
@@ -285,6 +343,8 @@ function FunctionTask({
   round,
   roundState,
 }: {
+  feedback: Feedback | null
+  feedbackRef: RefObject<HTMLDivElement | null>
   onCheck: () => void
   onSelect: (rowId: string) => void
   onToggleHint: () => void
@@ -297,6 +357,24 @@ function FunctionTask({
     ? allowedRows
     : variantOutcomeRows(allowedRows, round.referenceRows, originalFunctionRowId, round.correctRowId)
   const isVariant = round.context.sequenceIndex > 0
+  const selectedRow = visibleRows.find((row) => row.id === roundState.selectedFunctionRowId)
+  const hasVisibleSelection = Boolean(selectedRow)
+  const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    const keys = ['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End']
+    if (!keys.includes(event.key)) return
+    event.preventDefault()
+    const lastIndex = visibleRows.length - 1
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? lastIndex
+        : event.key === 'ArrowDown' || event.key === 'ArrowRight'
+          ? (index + 1) % visibleRows.length
+          : (index - 1 + visibleRows.length) % visibleRows.length
+    onSelect(visibleRows[nextIndex].id)
+    const rows = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('.function-row')
+    window.requestAnimationFrame(() => rows?.[nextIndex]?.focus())
+  }
 
   return (
     <div className="task-surface function-workbench">
@@ -311,10 +389,13 @@ function FunctionTask({
           return (
             <button
               aria-checked={selected}
+              aria-describedby={roundState.repairTarget?.kind === 'function-row' && selected && feedback ? 'task-repair-feedback' : undefined}
               className={`function-row ${isVariant ? 'outcome-card' : ''} ${selected ? 'selected' : ''} ${roundState.repairTarget?.kind === 'function-row' && selected ? 'repair-target' : ''}`}
               key={row.id}
               onClick={() => onSelect(row.id)}
+              onKeyDown={(event) => handleRowKeyDown(event, index)}
               role="radio"
+              tabIndex={selected || (!hasVisibleSelection && index === 0) ? 0 : -1}
               type="button"
             >
               {isVariant && <small className="outcome-comparison">Candidate {index + 1}</small>}
@@ -325,10 +406,45 @@ function FunctionTask({
           )
         })}
       </div>
+      <InlineFeedback
+        feedback={feedback}
+        feedbackRef={feedbackRef}
+        idleMessage={selectedRow
+          ? `Selected, not checked: ${selectedRow.proteinFunction}, ${selectedRow.expressedTrait}.`
+          : 'Select one assay row, then check the match.'}
+      />
       <div className="action-shelf function-action">
         <HintBlock hint={round.hint} isOpen={roundState.showHint} onToggle={onToggleHint} />
-        <button className="primary-action" disabled={!roundState.selectedFunctionRowId} onClick={onCheck} type="button"><Check aria-hidden="true" size={22} /> Check Match</button>
+        <button className="primary-action" disabled={!selectedRow} onClick={onCheck} type="button"><Check aria-hidden="true" size={22} /> Check Match</button>
       </div>
+    </div>
+  )
+}
+
+function InlineFeedback({
+  feedback,
+  feedbackRef,
+  idleMessage,
+}: {
+  feedback: Feedback | null
+  feedbackRef: RefObject<HTMLDivElement | null>
+  idleMessage?: string
+}) {
+  if (!feedback) return idleMessage ? (
+    <div aria-atomic="true" className="inline-feedback idle" role="status">
+      <span>{idleMessage}</span>
+    </div>
+  ) : null
+  return (
+    <div
+      aria-atomic="true"
+      className={`inline-feedback ${feedback.kind}`}
+      id="task-repair-feedback"
+      ref={feedbackRef}
+      role="alert"
+    >
+      <strong>{feedback.title}</strong>
+      <span>{feedback.detail ?? feedback.message}</span>
     </div>
   )
 }

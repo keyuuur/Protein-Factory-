@@ -48,9 +48,11 @@ export function TransferScreen({ current, onSubmit, task, total }: TransferScree
             </button>
           ))}
         </div>
-        <button className="primary-action" disabled={!answer} onClick={handleSubmit} type="button">
-          <Check aria-hidden="true" size={22} /> Check answer
-        </button>
+        <div className="screen-actions">
+          <button className="primary-action" disabled={!answer} onClick={handleSubmit} type="button">
+            <Check aria-hidden="true" size={22} /> Check answer
+          </button>
+        </div>
       </section>
     </main>
   )

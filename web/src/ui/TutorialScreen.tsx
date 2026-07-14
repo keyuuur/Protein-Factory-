@@ -28,9 +28,11 @@ export function TutorialScreen({ onContinue }: TutorialScreenProps) {
           <strong>Three proteins, three actions each</strong>
           <span>Corrections highlight the exact slot to repair. The codon wheel is always available during translation.</span>
         </div>
-        <button className="primary-action" onClick={onContinue} type="button">
-          Start Protein 1 <ArrowRight aria-hidden="true" size={22} />
-        </button>
+        <div className="screen-actions">
+          <button className="primary-action" onClick={onContinue} type="button">
+            Start Protein 1 <ArrowRight aria-hidden="true" size={22} />
+          </button>
+        </div>
       </section>
     </main>
   )

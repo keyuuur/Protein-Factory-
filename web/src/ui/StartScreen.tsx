@@ -75,10 +75,12 @@ export function StartScreen({ initialPeriod, onRestoreRecovery, onStart }: Start
             </label>
           </div>
 
-          <button className="primary-action begin-action" disabled={!canStart} type="submit">
-            <Play aria-hidden="true" size={22} /> Begin
-          </button>
-          <p className="form-note">Your run is saved on this device.</p>
+          <div className="start-actions">
+            <button className="primary-action begin-action" disabled={!canStart} type="submit">
+              <Play aria-hidden="true" size={22} /> Begin
+            </button>
+            <p className="form-note">Your run is saved on this device.</p>
+          </div>
 
           <details className="teacher-settings">
             <summary><Presentation aria-hidden="true" size={19} /> Teacher controls</summary>
@@ -125,7 +127,7 @@ export function StartScreen({ initialPeriod, onRestoreRecovery, onStart }: Start
                   type="file"
                 />
               </label>
-              {restoreStatus && <p role="status">{restoreStatus}</p>}
+              {restoreStatus && <p className="recovery-status" role="status">{restoreStatus}</p>}
             </div>
           </details>
         </form>

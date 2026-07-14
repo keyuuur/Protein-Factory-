@@ -10,7 +10,7 @@ interface RoundIntroProps {
 
 const sequenceNames = ['Original protein', 'Change A', 'Change B'] as const
 
-export function RoundIntro({ round, onBegin }: RoundIntroProps) {
+export function RoundIntro({ round, roundNumber, totalRounds, onBegin }: RoundIntroProps) {
   const sequenceNumber = round.context.sequenceIndex + 1
   const effect = round.context.sequenceEffect === 'original'
     ? 'Build the reference product.'
@@ -23,7 +23,7 @@ export function RoundIntro({ round, onBegin }: RoundIntroProps) {
       <section className="transition-strip" aria-labelledby="transition-title">
         <span className="transition-icon"><Dna aria-hidden="true" size={34} /></span>
         <div>
-          <p className="eyebrow">Protein {sequenceNumber} of 3</p>
+          <p className="eyebrow">Protein {sequenceNumber} of 3 | Stage {roundNumber} of {totalRounds}</p>
           <h1 id="transition-title">{sequenceNames[round.context.sequenceIndex]}</h1>
           <p>{effect}</p>
         </div>

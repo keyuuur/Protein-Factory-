@@ -50,20 +50,23 @@ export function CodonWheel({ activeCodonIndex, codons, isOpen, onClose, returnFo
 
     const scrollY = window.scrollY
     const body = document.body
+    const root = document.documentElement
     const nativeDialog = dialogRef.current
     const fallbackDialog = fallbackRef.current
     const returnFocusTarget = returnFocusRef.current
     const previousStyles = {
+      minHeight: body.style.minHeight,
       overflow: body.style.overflow,
       position: body.style.position,
       top: body.style.top,
       width: body.style.width,
     }
-
+    const previousRootOverflow = root.style.overflow
     body.style.overflow = 'hidden'
     body.style.position = 'fixed'
     body.style.top = `-${scrollY}px`
     body.style.width = '100%'
+    root.style.overflow = 'hidden'
 
     const restoreBackground = !nativeDialogAvailable && fallbackDialog
       ? isolateBackground(fallbackDialog)
@@ -81,24 +84,67 @@ export function CodonWheel({ activeCodonIndex, codons, isOpen, onClose, returnFo
       const dialogRoot = nativeDialogAvailable ? nativeDialog : fallbackDialog
       dialogRoot?.querySelector<HTMLButtonElement>('[data-wheel-close]')?.focus()
       const viewport = dialogRoot?.querySelector<HTMLElement>('[data-testid="codon-wheel-viewport"]')
-      if (viewport) {
-        viewport.scrollLeft = Math.max(0, (viewport.scrollWidth - viewport.clientWidth) / 2)
-        viewport.scrollTop = Math.max(0, (viewport.scrollHeight - viewport.clientHeight) / 2)
-      }
+      if (viewport) centerWheelViewport(viewport)
     })
+
+    const dialogRoot = nativeDialogAvailable ? nativeDialog : fallbackDialog
+    const viewport = dialogRoot?.querySelector<HTMLElement>('[data-testid="codon-wheel-viewport"]') ?? null
+    let viewportSize = viewport ? { height: viewport.clientHeight, width: viewport.clientWidth } : null
+    const preserveWheelCenter = () => {
+      if (!viewport || !viewportSize) return
+      const nextSize = { height: viewport.clientHeight, width: viewport.clientWidth }
+      viewport.scrollLeft = clampScroll(
+        viewport.scrollLeft + (viewportSize.width - nextSize.width) / 2,
+        viewport.scrollWidth - nextSize.width,
+      )
+      viewport.scrollTop = clampScroll(
+        viewport.scrollTop + (viewportSize.height - nextSize.height) / 2,
+        viewport.scrollHeight - nextSize.height,
+      )
+      viewportSize = nextSize
+    }
+    const keepFallbackFocusInside = (event: FocusEvent) => {
+      if (nativeDialogAvailable || !fallbackDialog || fallbackDialog.contains(event.target as Node)) return
+      getFocusableElements(fallbackDialog)[0]?.focus()
+    }
+
+    window.addEventListener('resize', preserveWheelCenter)
+    window.addEventListener('orientationchange', preserveWheelCenter)
+    window.visualViewport?.addEventListener('resize', preserveWheelCenter)
+    document.addEventListener('focusin', keepFallbackFocusInside)
 
     return () => {
       window.cancelAnimationFrame(focusFrame)
+      window.removeEventListener('resize', preserveWheelCenter)
+      window.removeEventListener('orientationchange', preserveWheelCenter)
+      window.visualViewport?.removeEventListener('resize', preserveWheelCenter)
+      document.removeEventListener('focusin', keepFallbackFocusInside)
       if (nativeDialog?.open) nativeDialog.close()
       body.style.overflow = previousStyles.overflow
+      root.style.overflow = previousRootOverflow
       body.style.position = previousStyles.position
       body.style.top = previousStyles.top
       body.style.width = previousStyles.width
-      window.scrollTo(0, scrollY)
+      body.style.minHeight = previousStyles.minHeight
+      restorePageScroll(scrollY)
       restoreBackground()
-      if (window.matchMedia(MOBILE_QUERY).matches) {
-        window.requestAnimationFrame(() => returnFocusTarget?.focus())
+      const restoreAfterViewportSettles = () => {
+        if (!returnFocusTarget?.isConnected) return
+        restorePageScroll(scrollY)
       }
+      const visualViewport = window.visualViewport
+      visualViewport?.addEventListener('resize', restoreAfterViewportSettles, { once: true })
+      window.requestAnimationFrame(() => {
+        if (window.matchMedia(MOBILE_QUERY).matches) focusIfAvailable(returnFocusTarget)
+        restorePageScroll(scrollY)
+        window.requestAnimationFrame(() => {
+          restorePageScroll(scrollY)
+        })
+      })
+      window.setTimeout(() => {
+        visualViewport?.removeEventListener('resize', restoreAfterViewportSettles)
+        restoreAfterViewportSettles()
+      }, 150)
     }
   }, [isCompact, isOpen, nativeDialogAvailable, returnFocusRef])
 
@@ -110,8 +156,7 @@ export function CodonWheel({ activeCodonIndex, codons, isOpen, onClose, returnFo
     }
     if (event.key !== 'Tab') return
 
-    const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
-      .filter((element) => !element.hasAttribute('hidden'))
+    const focusable = getFocusableElements(event.currentTarget)
     if (focusable.length === 0) {
       event.preventDefault()
       return
@@ -218,6 +263,7 @@ export function CodonWheel({ activeCodonIndex, codons, isOpen, onClose, returnFo
                 />
                 <text
                   className="wheel-third-base"
+                  style={{ fontSize: active ? 18 : 15 }}
                   textAnchor="middle"
                   transform={`rotate(${readableRotation(angle)} ${thirdPoint.x} ${thirdPoint.y})`}
                   x={thirdPoint.x}
@@ -225,6 +271,7 @@ export function CodonWheel({ activeCodonIndex, codons, isOpen, onClose, returnFo
                 >{entry.thirdBase}</text>
                 <text
                   className="wheel-amino-label"
+                  style={{ fontSize: active ? 18 : 15 }}
                   textAnchor="middle"
                   transform={`rotate(${readableRotation(angle)} ${labelPoint.x} ${labelPoint.y})`}
                   x={labelPoint.x}
@@ -321,6 +368,30 @@ function isolateBackground(dialog: HTMLElement): () => void {
       else element.setAttribute('aria-hidden', ariaHidden)
     }
   }
+}
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
+  )].filter((element) => !element.hasAttribute('hidden') && element.getClientRects().length > 0)
+}
+
+function focusIfAvailable(element: HTMLElement | null): void {
+  if (element?.isConnected && !element.hasAttribute('hidden')) element.focus({ preventScroll: true })
+}
+
+function centerWheelViewport(viewport: HTMLElement): void {
+  viewport.scrollLeft = clampScroll((viewport.scrollWidth - viewport.clientWidth) / 2, viewport.scrollWidth - viewport.clientWidth)
+  viewport.scrollTop = clampScroll((viewport.scrollHeight - viewport.clientHeight) / 2, viewport.scrollHeight - viewport.clientHeight)
+}
+
+function clampScroll(value: number, maximum: number): number {
+  return Math.min(Math.max(0, value), Math.max(0, maximum))
+}
+
+function restorePageScroll(scrollY: number): void {
+  window.scrollTo(0, scrollY)
+  if (document.scrollingElement) document.scrollingElement.scrollTop = scrollY
 }
 
 function useMediaQuery(query: string): boolean {

@@ -25,6 +25,7 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
     status: 200,
   }))
   await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'Protein Factory' })).toBeVisible()
   await capturePng(page, testInfo, `${visualPass}-initial-full-page`)
   await captureViewportPng(page, testInfo, `${visualPass}-initial-viewport`)
   await beginRun(page, { name: `Visual ${testInfo.project.name}` })
@@ -113,6 +114,8 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
   }
 
   await expect(page.getByTestId('end-screen')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+  await expect(page.getByRole('heading', { name: /production/i }).first()).toBeInViewport()
   await captureViewportPng(page, testInfo, `${visualPass}-final-viewport`)
   issues.assertClean()
 })

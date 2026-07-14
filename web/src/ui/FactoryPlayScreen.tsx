@@ -47,7 +47,7 @@ export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
 
   useEffect(() => {
     consoleRef.current?.scrollTo({ left: 0, top: 0 })
-  }, [currentRound.id])
+  }, [currentRound.id, state.isCodonWheelOpen])
 
   useEffect(() => {
     if (!soundEnabled || !feedback || feedback.kind === 'info') return undefined
