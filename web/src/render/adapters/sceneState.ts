@@ -42,7 +42,7 @@ export function buildFactorySceneState(state: GameSessionState): FactorySceneSna
   return {
     activeStationId: stationIdForRoundType(currentRound.type),
     completedStationIds: completedStations(state),
-    inputLocked: state.isCodonWheelOpen || state.screen !== 'playing',
+    inputLocked: stageComplete || state.isCodonWheelOpen || state.screen !== 'playing',
     progress: rounds.length > 0 ? Math.min(1, state.roundResults.length / rounds.length) : 0,
     sequenceIndex,
     activeAction: action,

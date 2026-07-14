@@ -21,6 +21,34 @@ interface TrayRecord {
 }
 
 type TokenEmphasis = 'none' | 'active' | 'changed' | 'repair'
+type MotionRole =
+  | 'base-seat'
+  | 'codon'
+  | 'pending-amino'
+  | 'chain-link'
+  | 'stop-gate'
+  | 'function-preview'
+  | 'repair-target'
+  | 'variant'
+type ReactionKind =
+  | 'idle'
+  | 'machine-change'
+  | 'base-seat'
+  | 'codon-advance'
+  | 'pending-amino'
+  | 'chain-link'
+  | 'stop-gate'
+  | 'function-preview'
+  | 'incorrect'
+  | 'repair'
+  | 'confirmed'
+  | 'variant-change'
+
+interface SceneReaction {
+  kind: ReactionKind
+  duration: number
+  index: number | null
+}
 
 export const MAX_RENDER_PIXELS = 1_500_000
 
@@ -85,6 +113,7 @@ export class FactoryRuntime {
   private motionEndsAt = 0
   private renderRevision = 0
   private sceneState: FactorySceneSnapshot | null = null
+  private reaction: SceneReaction = { kind: 'idle', duration: 0, index: null }
   private disposed = false
   private contextAvailable = true
   private reduceMotion = this.motionPreference.matches
@@ -137,6 +166,7 @@ export class FactoryRuntime {
 
   setState(sceneState: FactorySceneSnapshot): void {
     const previousState = this.sceneState
+    this.reaction = deriveSceneReaction(previousState, sceneState)
     this.renderRevision += 1
     this.publishRenderState(false, 'rendering')
     this.sceneState = sceneState
@@ -147,11 +177,7 @@ export class FactoryRuntime {
     this.updateComparisonTray(sceneState.completedProducts)
     this.renderer.domElement.setAttribute('aria-label', sceneDescription(sceneState))
 
-    const transitionStarted = sceneState.transitionActive && !previousState?.transitionActive
-    const feedbackChanged = sceneState.statusKind !== 'info'
-      && (previousState?.feedbackTitle !== sceneState.feedbackTitle || previousState?.statusKind !== sceneState.statusKind)
-    const duration = transitionStarted ? 1100 : feedbackChanged ? 650 : 0
-    this.beginMotion(duration)
+    this.beginMotion(this.reaction.duration)
   }
 
   dispose(): void {
@@ -215,9 +241,9 @@ export class FactoryRuntime {
     )
     this.labGroup.add(underBench)
 
-    this.addMachine('transcription', -4.25)
-    this.addMachine('translation', 0)
-    this.addMachine('function-test', 4.25)
+    this.addMachine('transcription')
+    this.addMachine('translation')
+    this.addMachine('function-test')
 
     const cargoDeck = mesh(
       new THREE.BoxGeometry(7.9, 0.18, 2.05),
@@ -267,41 +293,42 @@ export class FactoryRuntime {
     return { statusRing, progressFill }
   }
 
-  private addMachine(action: ProductionAction, x: number): void {
+  private addMachine(action: ProductionAction): void {
     const group = new THREE.Group()
-    group.position.set(x, 0.4, -1.65)
+    group.position.set(0, 0.34, -1.58)
+    group.visible = false
     const mutedMaterial = new THREE.MeshStandardMaterial({ color: 0x789093, metalness: 0.25, roughness: 0.5 })
     const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x3c555c, metalness: 0.32, roughness: 0.42 })
 
-    const base = mesh(new THREE.BoxGeometry(2.25, 0.25, 1.22), darkMaterial, [0, 0, 0])
+    const base = mesh(new THREE.BoxGeometry(7.8, 0.28, 1.72), darkMaterial, [0, 0, 0])
     group.add(base)
     const mover = new THREE.Group()
     group.add(mover)
 
     if (action === 'transcription') {
-      const leftPost = mesh(new THREE.BoxGeometry(0.28, 1.1, 0.38), mutedMaterial, [-0.78, 0.63, 0])
-      const rightPost = mesh(new THREE.BoxGeometry(0.28, 1.1, 0.38), mutedMaterial, [0.78, 0.63, 0])
-      const roller = mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.35, 18), darkMaterial, [0, 0.67, 0])
+      const leftPost = mesh(new THREE.BoxGeometry(0.38, 1.34, 0.54), mutedMaterial, [-3.15, 0.75, 0])
+      const rightPost = mesh(new THREE.BoxGeometry(0.38, 1.34, 0.54), mutedMaterial, [3.15, 0.75, 0])
+      const roller = mesh(new THREE.CylinderGeometry(0.31, 0.31, 5.95, 24), darkMaterial, [0, 0.84, 0])
       roller.rotation.z = Math.PI / 2
       mover.add(leftPost, rightPost, roller)
     } else if (action === 'translation') {
-      const lower = mesh(new THREE.SphereGeometry(0.68, 22, 14), mutedMaterial, [0, 0.42, 0])
-      lower.scale.set(1.18, 0.56, 0.82)
-      const upper = mesh(new THREE.SphereGeometry(0.61, 22, 14), darkMaterial, [0, 0.9, -0.05])
-      upper.scale.set(1.06, 0.48, 0.74)
+      const lower = mesh(new THREE.SphereGeometry(1.2, 28, 18), mutedMaterial, [0, 0.5, 0])
+      lower.scale.set(2.35, 0.48, 0.78)
+      const upper = mesh(new THREE.SphereGeometry(1.05, 28, 18), darkMaterial, [0, 1.03, -0.08])
+      upper.scale.set(2.05, 0.43, 0.68)
       mover.add(lower, upper)
     } else {
-      const chamber = mesh(new THREE.CylinderGeometry(0.62, 0.72, 1.2, 20), mutedMaterial, [0, 0.65, 0])
+      const chamber = mesh(new THREE.CylinderGeometry(1.05, 1.18, 1.42, 28), mutedMaterial, [0, 0.8, 0])
       const core = mesh(
-        new THREE.TorusKnotGeometry(0.25, 0.07, 50, 8),
+        new THREE.TorusKnotGeometry(0.48, 0.12, 64, 10),
         new THREE.MeshStandardMaterial({ color: 0xaab8b7, roughness: 0.38 }),
-        [0, 0.65, 0],
+        [0, 0.82, 0],
       )
       mover.add(chamber, core)
     }
 
     const lampMaterial = new THREE.MeshStandardMaterial({ color: 0x718689, emissive: 0x000000, roughness: 0.35 })
-    const lamp = mesh(new THREE.SphereGeometry(0.12, 14, 10), lampMaterial, [0.88, 0.24, 0.47])
+    const lamp = mesh(new THREE.SphereGeometry(0.16, 16, 12), lampMaterial, [3.45, 0.28, 0.64])
     group.add(lamp)
     this.labGroup.add(group)
     this.machineRecords.push({ action, group, lamp, mover })
@@ -311,7 +338,8 @@ export class FactoryRuntime {
     this.machineRecords.forEach((record) => {
       const active = record.action === activeAction
       const color = actionColors[record.action]
-      record.group.scale.setScalar(active ? 1.04 : 1)
+      record.group.visible = active
+      record.group.scale.setScalar(1)
       record.lamp.material.color.set(active ? color : 0x718689)
       record.lamp.material.emissive.set(active ? color : 0x000000)
       record.lamp.material.emissiveIntensity = active ? 0.55 : 0
@@ -344,7 +372,14 @@ export class FactoryRuntime {
         state.repairTarget?.kind === 'base' ? state.repairTarget.index : null,
         state.changedDnaIndex,
       )
-      this.buildMrna(state.mrna, state.dnaStrand.length, state.repairTarget?.kind === 'base' ? state.repairTarget.index : null)
+      this.buildMrna(
+        state.mrna,
+        state.dnaStrand.length,
+        state.repairTarget?.kind === 'base' ? state.repairTarget.index : null,
+        null,
+        null,
+        state.changedDnaIndex,
+      )
     } else if (state.activeAction === 'translation') {
       const repairCodon = state.repairTarget?.kind === 'codon' ? state.repairTarget.index : null
       const activeCodonIndex = state.activeCodon ? state.currentCodonIndex : null
@@ -361,6 +396,7 @@ export class FactoryRuntime {
         : null
       if (pendingIndex !== null && state.pendingAminoAcid) displayedAminoAcids[pendingIndex] = state.pendingAminoAcid
       this.buildAminoChain(displayedAminoAcids, repairCodon, state.currentCodonIndex, pendingIndex)
+      this.buildStopGate(state)
     } else {
       this.buildAminoChain(state.aminoAcidChain, null, -1, null)
       this.buildFunctionAssay(state)
@@ -385,6 +421,14 @@ export class FactoryRuntime {
       const second = this.molecularToken(complementaryDnaBase(base), emphasis, 'sphere')
       first.position.set(startX + index * spacing, 0.96 + yOffset, firstZ)
       second.position.set(startX + index * spacing, 0.96 - yOffset, secondZ)
+      if (repairIndex === index) {
+        markMotionTarget(first, 'repair-target')
+        markMotionTarget(second, 'repair-target')
+      }
+      if (changedIndex === index) {
+        markMotionTarget(first, 'variant')
+        markMotionTarget(second, 'variant')
+      }
       this.cargoGroup.add(first, second)
       const connectorColor = emphasis === 'repair' ? 0xc95656 : emphasis === 'changed' ? 0xd09a32 : 0xaebfbd
       this.cargoGroup.add(this.connectorBetween(first.position, second.position, connectorColor, 0.025))
@@ -397,6 +441,7 @@ export class FactoryRuntime {
     repairIndex: number | null,
     repairCodon: number | null = null,
     activeCodon: number | null = null,
+    changedIndex: number | null = null,
   ): void {
     const length = Math.max(sequence.length, expectedLength, 1)
     const spacing = sequenceSpacing(length, 7.2, 0.48)
@@ -408,11 +453,17 @@ export class FactoryRuntime {
       const repairHighlighted = repairIndex === index || (repairCodon !== null && codonIndex === repairCodon)
       const emphasis: TokenEmphasis = repairHighlighted
         ? 'repair'
+        : changedIndex === index
+          ? 'changed'
         : activeCodon !== null && codonIndex === activeCodon
           ? 'active'
           : 'none'
       const token = this.molecularToken(base, emphasis, 'box')
       token.position.set(startX + index * spacing, 0.72, 0.56)
+      if (repairHighlighted) markMotionTarget(token, 'repair-target')
+      if (this.reaction.kind === 'base-seat' && this.reaction.index === index) markMotionTarget(token, 'base-seat')
+      if (activeCodon !== null && codonIndex === activeCodon) markMotionTarget(token, 'codon')
+      if (changedIndex === index) markMotionTarget(token, 'variant')
       this.cargoGroup.add(token)
     }
   }
@@ -446,39 +497,97 @@ export class FactoryRuntime {
       const token = new THREE.Mesh(geometry, material)
       token.scale.setScalar(loaded ? 1 : 0.79)
       token.position.set(startX + index * spacing, 1.23 + Math.sin(index * 1.4) * 0.1, 0.12)
+      if (repairIndex === index) markMotionTarget(token, 'repair-target')
+      else if (pendingIndex === index) markMotionTarget(token, 'pending-amino')
+      else if (this.reaction.kind === 'chain-link' && this.reaction.index === index) markMotionTarget(token, 'chain-link')
       this.cargoGroup.add(token)
       if (previousPosition) this.cargoGroup.add(this.connectorBetween(previousPosition, token.position, 0x627c80, 0.045))
       previousPosition = token.position.clone()
     }
   }
 
+  private buildStopGate(state: FactorySceneSnapshot): void {
+    const stopActive = state.currentCodonIndex >= 4 || state.activeCodon === state.codons[4]
+    const stopPending = state.pendingAminoAcid === 'Stop'
+    const stopConfirmed = state.stageComplete && state.statusKind === 'success'
+    const stopRepair = state.repairTarget?.kind === 'codon' && state.repairTarget.index === 4
+    const color = stopRepair
+      ? 0xc95656
+      : stopConfirmed
+        ? 0x35a889
+        : stopActive || stopPending
+          ? 0xd09a32
+          : 0x829497
+    const material = this.pooledMaterial(
+      `stop-gate:${color}`,
+      () => new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: stopActive || stopPending || stopRepair || stopConfirmed ? 0.34 : 0.04,
+        metalness: 0.12,
+        roughness: 0.42,
+      }),
+    )
+    const gate = new THREE.Group()
+    gate.add(
+      mesh(this.pooledGeometry('stop-post', () => new THREE.BoxGeometry(0.11, 0.78, 0.11)), material, [-0.34, 0.39, 0]),
+      mesh(this.pooledGeometry('stop-post', () => new THREE.BoxGeometry(0.11, 0.78, 0.11)), material, [0.34, 0.39, 0]),
+      mesh(this.pooledGeometry('stop-bar', () => new THREE.BoxGeometry(0.78, 0.12, 0.15)), material, [0, 0.72, 0]),
+    )
+    gate.position.set(2.45, 0.76, 0.12)
+    markMotionTarget(gate, 'stop-gate')
+    this.cargoGroup.add(gate)
+  }
+
   private buildFunctionAssay(state: FactorySceneSnapshot): void {
     const selectedColor = state.selectedFunction
       ? traitColors[state.selectedFunction.traitColor]
       : 0x809496
+    const preview = new THREE.Group()
+    preview.position.set(2.55, 0, 0.1)
+    markMotionTarget(preview, 'function-preview')
+    const dock = mesh(
+      this.pooledGeometry('assay-dock', () => new THREE.BoxGeometry(2.1, 0.12, 0.94)),
+      this.pooledMaterial('assay-dock', () => new THREE.MeshStandardMaterial({ color: 0x6d8588, metalness: 0.18, roughness: 0.5 })),
+      [0, 0.48, 0],
+    )
     const vessel = mesh(
       this.pooledGeometry('assay-vessel', () => new THREE.CylinderGeometry(0.63, 0.72, 0.92, 22)),
       this.pooledMaterial(
         'assay-vessel',
         () => new THREE.MeshStandardMaterial({ color: 0xd8e5e3, metalness: 0.12, roughness: 0.34 }),
       ),
-      [2.65, 0.93, 0.1],
+      [-0.34, 0.93, 0],
     )
     const protein = mesh(
       this.pooledGeometry('assay-protein', () => new THREE.TorusKnotGeometry(0.29, 0.08, 58, 9)),
       this.pooledMaterial(
-        `assay-protein:${selectedColor}:${state.selectedFunction ? 1 : 0}`,
+        `assay-protein:${state.selectedFunction ? 1 : 0}`,
         () => new THREE.MeshStandardMaterial({
-          color: selectedColor,
-          emissive: selectedColor,
+          color: 0x2f8d8a,
+          emissive: 0x2f8d8a,
           emissiveIntensity: state.selectedFunction ? 0.25 : 0.05,
           roughness: 0.36,
         }),
       ),
-      [2.65, 0.96, 0.1],
+      [-0.34, 0.96, 0],
     )
     protein.rotation.x = Math.PI / 2
-    this.cargoGroup.add(vessel, protein)
+    const traitSwatch = mesh(
+      this.pooledGeometry('assay-swatch', () => new THREE.CylinderGeometry(0.29, 0.29, 0.14, 22)),
+      this.pooledMaterial(
+        `assay-swatch:${selectedColor}:${state.selectedFunction ? 1 : 0}`,
+        () => new THREE.MeshStandardMaterial({
+          color: selectedColor,
+          emissive: selectedColor,
+          emissiveIntensity: state.selectedFunction ? 0.32 : 0.02,
+          roughness: 0.4,
+        }),
+      ),
+      [0.69, 0.72, 0],
+    )
+    preview.add(dock, vessel, protein, traitSwatch)
+    this.cargoGroup.add(preview)
 
     const halo = new THREE.Mesh(
       this.pooledGeometry('tray-ring', () => new THREE.TorusGeometry(0.58, 0.05, 8, 32)),
@@ -488,7 +597,7 @@ export class FactoryRuntime {
       ),
     )
     halo.rotation.x = Math.PI / 2
-    halo.position.set(2.65, 0.49, 0.1)
+    halo.position.set(2.21, 0.49, 0.1)
     halo.scale.setScalar(state.repairTarget?.kind === 'function-row' ? 1.35 : 0.001)
     this.cargoGroup.add(halo)
   }
@@ -570,7 +679,7 @@ export class FactoryRuntime {
       )
       protein.rotation.x = Math.PI / 2
       protein.position.set(x, 0.81, 0)
-      protein.scale.setScalar(0.82)
+      protein.scale.setScalar(0.001)
       this.trayProducts.add(protein)
       this.trayRecords.push({ ring, protein })
     })
@@ -584,11 +693,11 @@ export class FactoryRuntime {
       ring.material.emissive.set(product ? sequenceColor : 0x000000)
       ring.material.emissiveIntensity = product ? 0.18 : 0
 
-      const productColor = product ? traitColors[product.traitColor] : 0x7e9193
+      const productColor = product ? 0x2f8d8a : 0x7e9193
       protein.material.color.set(productColor)
       protein.material.emissive.set(product ? productColor : 0x000000)
       protein.material.emissiveIntensity = product ? 0.16 : 0
-      protein.scale.setScalar(product ? 1 : 0.82)
+      protein.scale.setScalar(product ? 1 : 0.001)
     })
   }
 
@@ -661,11 +770,56 @@ export class FactoryRuntime {
     }
 
     const pulse = Math.sin(progress * Math.PI)
+    const quickPulse = Math.sin(progress * Math.PI * 2) * (1 - progress)
     this.statusRing.scale.set(1 + pulse * 0.018, 0.25 + pulse * 0.01, 1 + pulse * 0.018)
+    if (this.reaction.kind === 'incorrect') this.cargoGroup.position.x = quickPulse * 0.11
+    else this.cargoGroup.position.x = 0
+
+    this.cargoGroup.traverse((object) => {
+      const roles = object.userData.motionRoles as MotionRole[] | undefined
+      const homePosition = object.userData.homePosition as THREE.Vector3 | undefined
+      const homeScale = object.userData.homeScale as THREE.Vector3 | undefined
+      if (!roles?.length || !homePosition || !homeScale) return
+      object.position.copy(homePosition)
+      object.scale.copy(homeScale)
+      object.rotation.z = 0
+
+      if (roles.includes('base-seat') && this.reaction.kind === 'base-seat') {
+        object.position.y += (1 - eased) * 0.62 + pulse * 0.08
+        object.scale.multiplyScalar(0.72 + eased * 0.28)
+      } else if (roles.includes('codon') && this.reaction.kind === 'codon-advance') {
+        object.position.y += pulse * 0.13
+        object.scale.multiplyScalar(1 + pulse * 0.14)
+      } else if (roles.includes('pending-amino') && this.reaction.kind === 'pending-amino') {
+        object.position.y += (1 - eased) * 0.72 + pulse * 0.11
+        object.scale.multiplyScalar(0.62 + eased * 0.38)
+      } else if (roles.includes('chain-link') && this.reaction.kind === 'chain-link') {
+        object.position.x += (1 - eased) * 0.46
+        object.scale.multiplyScalar(0.58 + eased * 0.42)
+      } else if (roles.includes('stop-gate') && this.reaction.kind === 'stop-gate') {
+        object.scale.set(homeScale.x * (0.72 + eased * 0.28), homeScale.y * (1 + pulse * 0.2), homeScale.z)
+      } else if (roles.includes('function-preview') && this.reaction.kind === 'function-preview') {
+        object.position.y += (1 - eased) * 0.25 + pulse * 0.08
+        object.scale.multiplyScalar(0.78 + eased * 0.22)
+      } else if (roles.includes('repair-target') && this.reaction.kind === 'repair') {
+        object.scale.multiplyScalar(1 + pulse * 0.22)
+        object.rotation.z = quickPulse * 0.12
+      } else if (roles.includes('variant') && (this.reaction.kind === 'variant-change' || this.reaction.kind === 'machine-change')) {
+        object.scale.multiplyScalar(1 + pulse * 0.2)
+      }
+    })
+
+    if (this.reaction.kind === 'confirmed') {
+      this.cargoGroup.position.y += pulse * 0.16
+      this.statusRing.scale.multiplyScalar(1 + pulse * 0.035)
+    } else if (this.reaction.kind === 'repair') {
+      this.statusRing.scale.multiplyScalar(1 + pulse * 0.025)
+    }
+
     const activeMachine = this.machineRecords.find((record) => record.action === state.activeAction)
     if (activeMachine) {
-      activeMachine.mover.rotation.y = Math.sin(progress * Math.PI * 2) * 0.035
-      activeMachine.mover.position.y = pulse * 0.035
+      activeMachine.mover.rotation.y = quickPulse * (this.reaction.kind === 'incorrect' ? 0.08 : 0.035)
+      activeMachine.mover.position.y = pulse * (this.reaction.kind === 'confirmed' ? 0.1 : 0.045)
     }
   }
 
@@ -730,6 +884,9 @@ export class FactoryRuntime {
     this.container.dataset.renderPhase = phase
     this.container.dataset.renderRevision = String(this.renderRevision)
     this.container.dataset.renderSettled = String(settled)
+    if (phase === 'animating' || phase === 'settled') {
+      this.container.dataset.renderFrameRevision = String(this.renderRevision)
+    }
   }
 
   private finishMotion(): void {
@@ -741,6 +898,95 @@ export class FactoryRuntime {
     this.applyMotion(1)
     this.renderNow(true)
   }
+}
+
+function deriveSceneReaction(
+  previous: FactorySceneSnapshot | null,
+  next: FactorySceneSnapshot,
+): SceneReaction {
+  if (!previous) return { kind: 'idle', duration: 0, index: null }
+
+  const feedbackChanged = previous.feedbackTitle !== next.feedbackTitle || previous.statusKind !== next.statusKind
+  if (next.statusKind === 'error' && feedbackChanged) {
+    return { kind: 'incorrect', duration: 300, index: next.repairTarget?.index ?? null }
+  }
+  if (next.repairTarget && (!previous.repairTarget || !sameRepair(previous.repairTarget, next.repairTarget))) {
+    return { kind: 'repair', duration: 320, index: next.repairTarget.index }
+  }
+  if (next.stageComplete && !previous.stageComplete) {
+    return { kind: 'confirmed', duration: next.transitionActive ? 820 : 620, index: null }
+  }
+
+  if (previous.activeAction !== next.activeAction || previous.sequenceIndex !== next.sequenceIndex) {
+    return { kind: 'machine-change', duration: next.transitionActive ? 780 : 340, index: next.changedDnaIndex }
+  }
+
+  if (next.activeAction === 'transcription' && previous.mrna !== next.mrna) {
+    const changedIndex = firstChangedIndex(previous.mrna, next.mrna)
+    return {
+      kind: previous.repairTarget && !next.repairTarget ? 'confirmed' : 'base-seat',
+      duration: previous.repairTarget && !next.repairTarget ? 480 : 260,
+      index: changedIndex,
+    }
+  }
+
+  if (next.activeAction === 'translation') {
+    if (previous.pendingAminoAcid !== next.pendingAminoAcid && next.pendingAminoAcid) {
+      return next.pendingAminoAcid === 'Stop'
+        ? { kind: 'stop-gate', duration: 320, index: 4 }
+        : { kind: 'pending-amino', duration: 280, index: next.currentCodonIndex }
+    }
+    if (previous.aminoAcidChain.join('|') !== next.aminoAcidChain.join('|')) {
+      const changedIndex = next.aminoAcidChain.findIndex((value, index) => value !== previous.aminoAcidChain[index])
+      return { kind: 'chain-link', duration: 340, index: Math.max(0, changedIndex) }
+    }
+    if (previous.currentCodonIndex !== next.currentCodonIndex || previous.activeCodon !== next.activeCodon) {
+      return next.currentCodonIndex >= 4
+        ? { kind: 'stop-gate', duration: 320, index: 4 }
+        : { kind: 'codon-advance', duration: 260, index: next.currentCodonIndex }
+    }
+  }
+
+  if (next.activeAction === 'function-test' && previous.selectedFunctionRowId !== next.selectedFunctionRowId) {
+    return { kind: 'function-preview', duration: 300, index: null }
+  }
+
+  if (next.changedDnaIndex !== null && previous.changedDnaIndex !== next.changedDnaIndex) {
+    return { kind: 'variant-change', duration: 350, index: next.changedDnaIndex }
+  }
+  if (previous.repairTarget && !next.repairTarget) {
+    return { kind: 'confirmed', duration: 480, index: previous.repairTarget.index }
+  }
+  if (next.statusKind === 'success' && feedbackChanged) {
+    return { kind: 'confirmed', duration: next.transitionActive ? 820 : 520, index: null }
+  }
+  return { kind: 'idle', duration: 0, index: null }
+}
+
+function sameRepair(
+  first: FactorySceneSnapshot['repairTarget'],
+  second: FactorySceneSnapshot['repairTarget'],
+): boolean {
+  return Boolean(first && second
+    && first.kind === second.kind
+    && first.index === second.index
+    && first.submitted === second.submitted)
+}
+
+function firstChangedIndex(previous: string, next: string): number {
+  const length = Math.max(previous.length, next.length)
+  for (let index = 0; index < length; index += 1) {
+    if (previous[index] !== next[index]) return index
+  }
+  return Math.max(0, next.length - 1)
+}
+
+function markMotionTarget(object: THREE.Object3D, role: MotionRole): void {
+  const roles = (object.userData.motionRoles as MotionRole[] | undefined) ?? []
+  if (!roles.includes(role)) roles.push(role)
+  object.userData.motionRoles = roles
+  object.userData.homePosition = object.position.clone()
+  object.userData.homeScale = object.scale.clone()
 }
 
 function mesh<G extends THREE.BufferGeometry, M extends THREE.Material>(
@@ -775,7 +1021,16 @@ function aminoColor(aminoAcid: string): number {
 function sceneDescription(state: FactorySceneSnapshot): string {
   const repair = state.repairTarget ? ` Repair needed at ${state.repairTarget.label}.` : ''
   const feedback = state.feedbackTitle ? ` ${state.feedbackTitle}. ${state.feedbackMessage}` : ''
-  return `${state.cargoLabel}. ${state.activeStationLabel} action.${repair}${feedback}`.trim()
+  const actionState = state.activeAction === 'transcription'
+    ? ` The mRNA product contains ${state.mrna.length} of ${state.dnaStrand.length} bases.`
+    : state.activeAction === 'translation'
+      ? state.activeCodon
+        ? ` Active codon ${state.activeCodon}.${state.pendingAminoAcid ? ` Pending amino acid ${state.pendingAminoAcid}.` : ''}${state.currentCodonIndex === 4 ? ' Stop is a signal and is not added to the amino acid chain.' : ''}`
+        : ''
+      : state.selectedFunction
+        ? ` Provisional assay outcome: ${state.selectedFunction.proteinFunction}, ${state.selectedFunction.expressedTrait}.`
+        : ' No assay outcome selected.'
+  return `${state.cargoLabel}. ${state.activeStationLabel} action.${actionState}${repair}${feedback}`.trim()
 }
 
 function clearGroup(group: THREE.Group): void {

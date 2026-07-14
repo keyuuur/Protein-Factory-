@@ -61,6 +61,7 @@ export function FactoryCanvas({ sceneState, onStationSelect }: FactoryCanvasProp
       data-changed-dna-index={sceneState.changedDnaIndex ?? undefined}
       data-completed-products={sceneState.completedProducts.length}
       data-pending-amino-acid={sceneState.pendingAminoAcid ?? undefined}
+      data-render-frame-revision="0"
       data-render-revision="0"
       data-render-settled="false"
       data-sequence-index={sceneState.sequenceIndex}
