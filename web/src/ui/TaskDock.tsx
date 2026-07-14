@@ -63,10 +63,7 @@ export function TaskDock({
       data-testid="task-dock"
     >
       <header className="task-dock-header">
-        <div>
-          <p className="eyebrow">{proteinLabel(round.context.sequenceIndex)}</p>
-          <h2 id="task-dock-title">{actionTitle(round)}</h2>
-        </div>
+        <h2 id="task-dock-title">{actionTitle(round)}</h2>
         <p>{round.prompt}</p>
       </header>
 
@@ -349,12 +346,6 @@ function actionTitle(round: GameRound): string {
   if (round.type === 'transcription') return 'Build the mRNA'
   if (round.type === 'translation') return 'Build the amino acid chain'
   return 'Function Test'
-}
-
-function proteinLabel(sequenceIndex: number): string {
-  if (sequenceIndex === 0) return 'Protein 1: Original'
-  if (sequenceIndex === 1) return 'Protein 2: One-base change'
-  return 'Protein 3: Another one-base change'
 }
 
 function variantOutcomeRows(

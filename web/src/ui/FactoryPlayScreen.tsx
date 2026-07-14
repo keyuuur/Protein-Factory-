@@ -27,6 +27,7 @@ const proteinLabels = [
   'Protein 2: One-base change',
   'Protein 3: Another one-base change',
 ] as const
+const trayLabels = ['P1 Original', 'P2 Base change', 'P3 Base change'] as const
 
 export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
   const rounds = state.runManifest.rounds
@@ -117,58 +118,59 @@ export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
         <section className="laboratory-viewport" aria-label="Active cell laboratory view">
           <FactoryCanvas onStationSelect={handleStationSelect} sceneState={sceneState} />
           <div className="lab-viewport-label" aria-hidden="true">
-            <span>Cell laboratory</span>
-            <strong>{actionTitle(currentRound.context.action)}</strong>
+            <span>Active laboratory</span>
           </div>
         </section>
 
-        <ComparisonTray products={state.completedProducts} />
+        <section className="bench-deck" aria-label="Student task console">
+          <section className={`console-frame ${currentRound.type === 'translation' && state.isCodonWheelOpen ? 'wheel-expanded' : ''}`} ref={consoleRef}>
+            <div className="console-layout">
+              <TaskDock
+                completion={completion}
+                feedback={state.feedback}
+                onAppendBase={(base) => dispatch({ type: 'APPEND_BASE', base })}
+                onBackspace={() => dispatch({ type: 'BACKSPACE' })}
+                onCheckBaseRound={() => dispatch({ type: 'CHECK_BASE_ROUND' })}
+                onCheckFunctionTest={() => dispatch({ type: 'CHECK_FUNCTION_ROW' })}
+                onCheckTranslationCodon={() => dispatch({ type: 'CHECK_TRANSLATION_CODON' })}
+                onClear={() => dispatch({ type: 'CLEAR_INPUT' })}
+                onContinue={() => dispatch({ type: 'CONTINUE_AFTER_SUCCESS', now: Date.now() })}
+                onGoToTranslationCodon={(index) => dispatch({ type: 'GO_TO_TRANSLATION_CODON', index })}
+                onSelectFunctionRow={(rowId) => dispatch({ type: 'SELECT_FUNCTION_ROW', rowId })}
+                onSelectTranslation={(index, value) => dispatch({ type: 'SELECT_TRANSLATION', index, value })}
+                onToggleHint={() => dispatch({ type: 'TOGGLE_HINT' })}
+                originalFunctionRowId={originalSequence.functionRowId}
+                round={currentRound}
+                roundNumber={state.currentRoundIndex + 1}
+                roundState={state.roundState}
+                totalRounds={rounds.length}
+              />
 
-        <section className={`console-frame ${currentRound.type === 'translation' && state.isCodonWheelOpen ? 'wheel-expanded' : ''}`} ref={consoleRef}>
-          <div className="console-layout">
-            <TaskDock
-              completion={completion}
-              feedback={state.feedback}
-              onAppendBase={(base) => dispatch({ type: 'APPEND_BASE', base })}
-              onBackspace={() => dispatch({ type: 'BACKSPACE' })}
-              onCheckBaseRound={() => dispatch({ type: 'CHECK_BASE_ROUND' })}
-              onCheckFunctionTest={() => dispatch({ type: 'CHECK_FUNCTION_ROW' })}
-              onCheckTranslationCodon={() => dispatch({ type: 'CHECK_TRANSLATION_CODON' })}
-              onClear={() => dispatch({ type: 'CLEAR_INPUT' })}
-              onContinue={() => dispatch({ type: 'CONTINUE_AFTER_SUCCESS', now: Date.now() })}
-              onGoToTranslationCodon={(index) => dispatch({ type: 'GO_TO_TRANSLATION_CODON', index })}
-              onSelectFunctionRow={(rowId) => dispatch({ type: 'SELECT_FUNCTION_ROW', rowId })}
-              onSelectTranslation={(index, value) => dispatch({ type: 'SELECT_TRANSLATION', index, value })}
-              onToggleHint={() => dispatch({ type: 'TOGGLE_HINT' })}
-              originalFunctionRowId={originalSequence.functionRowId}
-              round={currentRound}
-              roundNumber={state.currentRoundIndex + 1}
-              roundState={state.roundState}
-              totalRounds={rounds.length}
-            />
+              {currentRound.type === 'translation' && (
+                <>
+                  <button
+                    aria-haspopup="dialog"
+                    className="secondary-action wheel-launch"
+                    hidden={state.isCodonWheelOpen}
+                    onClick={() => dispatch({ type: 'OPEN_CODON_WHEEL' })}
+                    ref={wheelLaunchRef}
+                    type="button"
+                  >
+                    <CircleDot aria-hidden="true" size={20} /> Open Codon Wheel
+                  </button>
+                  <CodonWheel
+                    activeCodonIndex={state.roundState.currentCodonIndex}
+                    codons={currentRound.codons}
+                    isOpen={state.isCodonWheelOpen}
+                    onClose={() => dispatch({ type: state.isCodonWheelOpen ? 'CLOSE_CODON_WHEEL' : 'OPEN_CODON_WHEEL' })}
+                    returnFocusRef={wheelLaunchRef}
+                  />
+                </>
+              )}
+            </div>
+          </section>
 
-            {currentRound.type === 'translation' && (
-              <>
-                <button
-                  aria-haspopup="dialog"
-                  className="secondary-action wheel-launch"
-                  hidden={state.isCodonWheelOpen}
-                  onClick={() => dispatch({ type: 'OPEN_CODON_WHEEL' })}
-                  ref={wheelLaunchRef}
-                  type="button"
-                >
-                  <CircleDot aria-hidden="true" size={20} /> Open Codon Wheel
-                </button>
-                <CodonWheel
-                  activeCodonIndex={state.roundState.currentCodonIndex}
-                  codons={currentRound.codons}
-                  isOpen={state.isCodonWheelOpen}
-                  onClose={() => dispatch({ type: state.isCodonWheelOpen ? 'CLOSE_CODON_WHEEL' : 'OPEN_CODON_WHEEL' })}
-                  returnFocusRef={wheelLaunchRef}
-                />
-              </>
-            )}
-          </div>
+          {currentRound.type === 'transcription' && <ComparisonTray products={state.completedProducts} />}
         </section>
       </section>
     </main>
@@ -199,21 +201,15 @@ function ComparisonTray({ products }: { products: ProductSnapshot[] }) {
         const product = products[index]
         return product ? (
           <article className="product-chip" key={product.sequenceId}>
-            <span>{proteinLabels[index]}</span>
+            <span aria-label={proteinLabels[index]}>{trayLabels[index]}</span>
             <strong>{product.aminoAcidChain.join('-')}</strong>
             <i className={`trait-swatch ${product.traitColor}`} aria-hidden="true" />
             <small>{product.expressedTrait}</small>
           </article>
         ) : (
-          <div className="product-chip empty" key={`empty-${index}`}><span>{proteinLabels[index]}</span><strong>Waiting</strong></div>
+          <div className="product-chip empty" key={`empty-${index}`}><span aria-label={proteinLabels[index]}>{trayLabels[index]}</span><strong>Waiting</strong></div>
         )
       })}
     </section>
   )
-}
-
-function actionTitle(action: ProductionAction): string {
-  if (action === 'transcription') return 'Build mRNA'
-  if (action === 'translation') return 'Build the amino acid chain'
-  return 'Test protein function'
 }

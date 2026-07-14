@@ -159,17 +159,86 @@ export async function readLatestPayload(page: Page): Promise<FinalGamePayload | 
 }
 
 export async function assertNoHorizontalOverflow(page: Page) {
-  const dimensions = await page.evaluate(() => ({
-    clientWidth: document.documentElement.clientWidth,
-    innerWidth: window.innerWidth,
-    scrollWidth: document.documentElement.scrollWidth,
-  }))
+  const dimensions = await page.evaluate(() => {
+    const clippedControls = [...document.querySelectorAll<HTMLElement>('button, [role="radio"], input, select')]
+      .filter((element) => {
+        const style = getComputedStyle(element)
+        if (style.display === 'none' || style.visibility === 'hidden') return false
+        const bounds = element.getBoundingClientRect()
+        return bounds.width > 0 && bounds.height > 0 && (bounds.left < -1 || bounds.right > window.innerWidth + 1)
+      })
+      .map((element) => ({
+        left: Math.round(element.getBoundingClientRect().left),
+        name: element.getAttribute('aria-label') ?? element.textContent?.trim().slice(0, 80) ?? element.tagName,
+        right: Math.round(element.getBoundingClientRect().right),
+      }))
+    return {
+      clientWidth: document.documentElement.clientWidth,
+      clippedControls,
+      innerWidth: window.innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }
+  })
   expect(dimensions.scrollWidth, JSON.stringify(dimensions)).toBeLessThanOrEqual(dimensions.innerWidth + 1)
+  expect(dimensions.clippedControls, `interactive controls must fit the viewport: ${JSON.stringify(dimensions)}`).toEqual([])
+}
+
+export async function assertMinimumButtonSize(page: Page, minimum = 48) {
+  const undersized = await page.locator('button:visible').evaluateAll((buttons, expectedMinimum) => buttons
+    .map((button) => {
+      const bounds = button.getBoundingClientRect()
+      const style = getComputedStyle(button)
+      return {
+        computedHeight: style.height,
+        computedMinHeight: style.minHeight,
+        height: bounds.height,
+        name: button.getAttribute('aria-label') ?? button.textContent?.trim() ?? '(unnamed button)',
+        width: bounds.width,
+      }
+    })
+    .filter(({ height, width }) => height + 0.5 < expectedMinimum || width + 0.5 < expectedMinimum), minimum)
+
+  expect(undersized, `visible buttons should be at least ${minimum}px in both dimensions`).toEqual([])
+}
+
+export async function assertPrimaryActionIsInViewport(page: Page) {
+  const primaryAction = page.locator('.primary-action:visible').first()
+  await expect(primaryAction).toBeVisible()
+  const bounds = await primaryAction.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return {
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      viewportHeight: window.visualViewport?.height ?? window.innerHeight,
+      viewportWidth: window.visualViewport?.width ?? window.innerWidth,
+    }
+  })
+  expect(bounds.left, JSON.stringify(bounds)).toBeGreaterThanOrEqual(-0.5)
+  expect(bounds.top, JSON.stringify(bounds)).toBeGreaterThanOrEqual(-0.5)
+  expect(bounds.right, JSON.stringify(bounds)).toBeLessThanOrEqual(bounds.viewportWidth + 0.5)
+  expect(bounds.bottom, JSON.stringify(bounds)).toBeLessThanOrEqual(bounds.viewportHeight + 0.5)
+}
+
+export async function assertRendererSettled(page: Page) {
+  const host = page.getByTestId('factory-canvas')
+  await expect(host).toHaveAttribute('data-render-settled', 'true', { timeout: 3_000 })
+  await expect(host).toHaveAttribute('data-render-phase', 'settled')
+
+  const settledRevision = await host.getAttribute('data-render-revision')
+  expect(settledRevision).toMatch(/^\d+$/)
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  }))
+  await expect(host).toHaveAttribute('data-render-settled', 'true')
+  await expect(host).toHaveAttribute('data-render-phase', 'settled')
+  await expect(host).toHaveAttribute('data-render-revision', settledRevision!)
 }
 
 export async function assertCanvasIsRendered(page: Page) {
   const host = page.getByTestId('factory-canvas')
-  await expect(host).toHaveAttribute('data-render-settled', 'true', { timeout: 1_500 })
+  await assertRendererSettled(page)
   const canvas = host.locator('canvas')
   await expect(canvas).toBeVisible()
   const buffer = await canvas.screenshot()
@@ -263,11 +332,14 @@ async function assertFullPageCapture(filePath: string) {
   const png = PNG.sync.read(await readFile(filePath))
   const total = png.width * png.height
   let pureBlack = 0
+  let transparent = 0
   for (let index = 0; index < png.data.length; index += 4) {
     const [red, green, blue, alpha] = png.data.subarray(index, index + 4)
+    if (alpha === 0) transparent += 1
     if (alpha > 0 && red < 8 && green < 8 && blue < 8) pureBlack += 1
   }
   expect(pureBlack / total, 'full-page capture should not contain black compositor tiles').toBeLessThan(0.05)
+  expect(transparent / total, 'full-page capture should not contain transparent compositor tiles').toBeLessThan(0.01)
 }
 
 export function countDifferences(left: string, right: string): number {
