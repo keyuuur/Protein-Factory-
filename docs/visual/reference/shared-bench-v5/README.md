@@ -7,8 +7,10 @@ These standalone PNGs are visual targets for the next interface passes. They are
 ## Reference Set
 
 - `ideals/01-transcription-student-pov.png`: filled DNA row, empty mRNA row, large base controls, and a transcription machine on the same shared bench.
-- `ideals/02-translation-student-pov.png`: active codon cargo, four amino-acid sockets, a separate Stop gate, and a large inline codon-wheel area.
-- `ideals/03-function-test-student-pov.png`: completed chain, illuminated assay chamber, three complete outcome choices, visible fur swatches, and persistent product bays.
+- `ideals/02-translation-student-pov.png`: one active codon, four amino-acid slots, a separate Stop indicator, a restrained inline codon-wheel area, and one answer row.
+- `ideals/03-function-test-student-pov.png`: one small protein chamber, the completed chain, three broad outcome rows, and simple fur-color swatches.
+
+The earlier, busier Translation and Function Test concepts are retained under `archive/` for iteration history only. They are rejected as implementation targets.
 
 ## Design Targets
 
@@ -17,7 +19,7 @@ These standalone PNGs are visual targets for the next interface passes. They are
 - The process rail stays compact and communicates forward movement from DNA to protein function.
 - Touch choices are large, tactile, and close to the molecular object they affect.
 - The 3D laboratory reacts to selections instead of acting only as a background.
-- Product bays preserve the comparison across all three protein sequences without taking over the workspace.
+- Translation and Function Test each use one uncomplicated work surface with no permanent product bays or competing status panels.
 - The interface stays bright, practical, and classroom-safe rather than dark or cinematic.
 
 ## Accuracy Boundary
