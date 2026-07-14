@@ -115,6 +115,12 @@ test.describe('V4 desktop gameplay', () => {
     const initial = await currentState(page)
 
     for (let action = 0; action < 9; action += 1) {
+      if (action === 3 || action === 4) {
+        await expect(page.getByTestId('task-dock')).not.toContainText(/same chain|amino acid changed/i)
+      }
+      if (action === 3) {
+        await expect(page.getByText('Complete the mRNA base beneath the highlighted DNA change.')).toBeVisible()
+      }
       await completeCurrentAction(page)
       const state = await currentState(page)
       expect(state.roundResults).toHaveLength(action + 1)
@@ -134,8 +140,9 @@ test.describe('V4 desktop gameplay', () => {
     }
 
     await expect(page.getByRole('heading', { name: 'Precision Production' })).toBeVisible()
-    await expect(page.getByText('9 of 9 actions completed (100%)')).toBeVisible()
-    await expect(page.getByText('9 of 9 completed actions were independent')).toBeVisible()
+    await expect(page.getByText('9/9 completed')).toBeVisible()
+    await expect(page.locator('.independence-result')).toContainText('9/9 independently')
+    await expect(page.locator('.independence-result')).toContainText('(100%)')
     await expect(page.getByRole('progressbar', { name: '100% independent' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Your three protein products' })).toBeVisible()
     await expect.poll(() => submittedAttempt).not.toBeNull()
@@ -158,7 +165,7 @@ test.describe('V4 desktop gameplay', () => {
 
     await page.getByRole('button', { name: 'Replay' }).click()
     await expect(page.getByTestId('factory-play')).toBeVisible()
-    await expect(page.getByText('0/9 complete')).toBeVisible()
+    await expect(page.locator('.stage-score')).toContainText('0/9')
     const replay = await currentState(page)
     expect(replay.identity.firstName).toBe('Payload Student')
     expect(replay.attemptId).not.toBe(initial.attemptId)

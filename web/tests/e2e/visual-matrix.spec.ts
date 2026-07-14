@@ -17,11 +17,12 @@ test('captures the complete V4 flow at the project viewport', async ({ page }, t
     status: 200,
   }))
   await page.goto('/')
+  await capturePng(page, testInfo, 'ui-pass-a-start')
   await beginRun(page, { name: `Visual ${testInfo.project.name}` })
 
   await expect(page.getByRole('heading', { name: 'Build the mRNA' })).toBeVisible()
   await assertCanvasIsRendered(page)
-  await capturePng(page, testInfo, 'transcription')
+  await capturePng(page, testInfo, 'ui-pass-a-transcription')
   await completeCurrentAction(page)
   await continueAfterSuccess(page)
 
@@ -34,7 +35,7 @@ test('captures the complete V4 flow at the project viewport', async ({ page }, t
   } else {
     await page.getByTestId('codon-wheel').getByRole('button', { name: 'Enlarge codon wheel' }).click()
   }
-  await capturePng(page, testInfo, 'translation-wheel')
+  await capturePng(page, testInfo, 'ui-pass-a-translation-wheel')
   if (viewport && viewport.width <= 820 && viewport.height > viewport.width) {
     await page.getByRole('button', { name: 'Close codon wheel' }).click()
   }
@@ -42,18 +43,20 @@ test('captures the complete V4 flow at the project viewport', async ({ page }, t
   await continueAfterSuccess(page)
 
   await expect(page.getByRole('heading', { name: 'Function Test' })).toBeVisible()
-  await capturePng(page, testInfo, 'function-test')
+  await capturePng(page, testInfo, 'ui-pass-a-function-test')
   await completeCurrentAction(page)
-  await capturePng(page, testInfo, 'transition-comparison')
+  await capturePng(page, testInfo, 'ui-pass-a-transition-comparison')
   await continueAfterSuccess(page)
 
   for (let action = 3; action < 9; action += 1) {
+    if (action === 3) await capturePng(page, testInfo, 'ui-pass-a-variant-transcription')
+    if (action === 5) await capturePng(page, testInfo, 'ui-pass-a-variant-function-test')
     await completeCurrentAction(page)
     await continueAfterSuccess(page)
   }
 
   await expect(page.getByTestId('end-screen')).toBeVisible()
-  await capturePng(page, testInfo, 'final')
+  await capturePng(page, testInfo, 'ui-pass-a-final')
   issues.assertClean()
 })
 

@@ -3,6 +3,7 @@ import type { PersistedSubmissionItem, ResultRepository } from './resultReposito
 
 const maxQueueItems = 30
 const retryDelaysMs = [5_000, 15_000, 60_000, 300_000, 900_000] as const
+const submissionRequestTimeoutMs = 10_000
 
 export type SubmissionStatus =
   | 'local-draft'
@@ -115,12 +116,7 @@ async function drainQueue(options: SubmissionQueueOptions): Promise<SubmissionQu
     }, options, now())
 
     try {
-      const response = await (options.fetcher ?? fetch)(options.endpoint ?? '/api/attempt', {
-        body: JSON.stringify({ attempt: saving.attempt }),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST',
-      })
-      const body = await readResponseBody(response)
+      const { body, response } = await submitAttempt(options, saving.attempt)
       if (response.ok && body.ok === true) {
         const submitted = await updateItem(saving, {
           error: undefined,
@@ -151,6 +147,35 @@ async function drainQueue(options: SubmissionQueueOptions): Promise<SubmissionQu
       }, options, now())
       processed.set(failed.attemptId, failed)
     }
+  }
+}
+
+async function submitAttempt(
+  options: SubmissionQueueOptions,
+  attempt: ProteinFactorySubmissionAttempt,
+): Promise<{ body: Record<string, unknown>, response: Response }> {
+  const controller = typeof AbortController === 'undefined' ? null : new AbortController()
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  const request = (async () => {
+    const response = await (options.fetcher ?? fetch)(options.endpoint ?? '/api/attempt', {
+      body: JSON.stringify({ attempt }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      signal: controller?.signal,
+    })
+    return { body: await readResponseBody(response), response }
+  })()
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller?.abort()
+      reject(new Error('Submission request timed out.'))
+    }, submissionRequestTimeoutMs)
+  })
+
+  try {
+    return await Promise.race([request, deadline])
+  } finally {
+    if (timeout !== null) clearTimeout(timeout)
   }
 }
 

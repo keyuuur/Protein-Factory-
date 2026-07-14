@@ -225,11 +225,14 @@ function completeCurrentStage(state: GameSessionState): GameSessionState {
   const round = state.runManifest.rounds[state.currentRoundIndex]
   let next = state
   if (round.type === 'transcription') {
-    next = [...round.answer].reduce((current, base) => gameReducer(current, { type: 'APPEND_BASE', base }), next)
+    for (const [index, base] of [...round.answer].entries()) {
+      if (next.roundState.input[index] !== base) next = gameReducer(next, { type: 'APPEND_BASE', base })
+    }
     return gameReducer(next, { type: 'CHECK_BASE_ROUND' })
   }
   if (round.type === 'translation') {
     for (let index = 0; index < round.answers.length; index += 1) {
+      if (next.roundState.answers[index] === round.answers[index]) continue
       next = gameReducer(next, { type: 'SELECT_TRANSLATION', index, value: round.answers[index] })
       next = gameReducer(next, { type: 'CHECK_TRANSLATION_CODON' })
     }

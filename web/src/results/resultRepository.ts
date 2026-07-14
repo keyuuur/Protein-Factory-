@@ -18,6 +18,7 @@ const legacyResultKey = 'pirate-protein-factory:last-payload'
 const legacyHistoryKey = 'pirate-protein-factory:payload-history'
 const fallbackStateKey = 'pirate-protein-factory:repository-v2:authoritative-state'
 const fallbackStateSchemaVersion = 'protein-factory-repository-fallback-v1' as const
+const indexedDbOperationTimeoutMs = 2_000
 const maxResults = 30
 const repositoryRecordKeys = [queueRecordKey, checkpointRecordKey, resultsRecordKey] as const
 
@@ -61,14 +62,17 @@ export interface ResultRepository {
 
 export class BrowserResultRepository implements ResultRepository {
   private database: IDBDatabase | null = null
-  private initialized = false
+  private initializationPromise: Promise<void> | null = null
   private memory = new Map<string, unknown>()
   private storage: Storage | null = null
   durability: PersistenceDurability = 'memory-only'
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return
-    this.initialized = true
+  initialize(): Promise<void> {
+    if (!this.initializationPromise) this.initializationPromise = this.initializeRepository()
+    return this.initializationPromise
+  }
+
+  private async initializeRepository(): Promise<void> {
     this.storage = usableLocalStorage()
     const fallbackState = readAuthoritativeFallbackState(this.storage)
 
@@ -357,12 +361,33 @@ function openDatabase(): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') return Promise.reject(new Error('IndexedDB unavailable.'))
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(databaseName, databaseVersion)
+    let settled = false
+    const timeout = setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error('IndexedDB open timed out.'))
+    }, indexedDbOperationTimeoutMs)
+    const fail = (error: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      reject(error)
+    }
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(recordStore)) request.result.createObjectStore(recordStore)
     }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed.'))
-    request.onblocked = () => reject(new Error('IndexedDB open blocked.'))
+    request.onsuccess = () => {
+      const database = request.result
+      if (settled) {
+        database.close()
+        return
+      }
+      settled = true
+      clearTimeout(timeout)
+      resolve(database)
+    }
+    request.onerror = () => fail(request.error ?? new Error('IndexedDB open failed.'))
+    request.onblocked = () => fail(new Error('IndexedDB open blocked.'))
   })
 }
 
@@ -375,9 +400,32 @@ function idbRequest<T>(request: IDBRequest<T>): Promise<T> {
 
 function idbTransaction(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve()
-    transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB transaction failed.'))
-    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted.'))
+    let settled = false
+    const timeout = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try {
+        transaction.abort()
+      } catch {
+        // The transaction may have completed while the timeout callback was queued.
+      }
+      reject(new Error('IndexedDB transaction timed out.'))
+    }, indexedDbOperationTimeoutMs)
+    const complete = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve()
+    }
+    const fail = (error: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      reject(error)
+    }
+    transaction.oncomplete = complete
+    transaction.onerror = () => fail(transaction.error ?? new Error('IndexedDB transaction failed.'))
+    transaction.onabort = () => fail(transaction.error ?? new Error('IndexedDB transaction aborted.'))
   })
 }
 

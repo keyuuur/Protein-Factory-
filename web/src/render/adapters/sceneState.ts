@@ -21,11 +21,15 @@ export interface FunctionSelection {
 export interface FactorySceneSnapshot extends FactorySceneState {
   codons: string[]
   currentCodonIndex: number
+  activeCodon: string | null
+  changedDnaIndex: number | null
+  pendingAminoAcid: string | null
   repairTarget: RepairTarget | null
   selectedFunction: FunctionSelection | null
   feedbackTitle: string
   feedbackMessage: string
   stageComplete: boolean
+  wheelObscured: boolean
 }
 
 export function buildFactorySceneState(state: GameSessionState): FactorySceneSnapshot {
@@ -50,15 +54,23 @@ export function buildFactorySceneState(state: GameSessionState): FactorySceneSna
     mrna: action === 'transcription' ? state.roundState.input : sequence.mrna,
     aminoAcidChain: currentAminoAcids(currentRound, state),
     selectedFunctionRowId: state.roundState.selectedFunctionRowId,
-    completedProducts: state.completedProducts,
+    completedProducts: [...state.completedProducts],
     transitionActive: state.screen === 'sequence-transition',
     codons: [...sequence.mrnaCodons],
     currentCodonIndex: state.roundState.currentCodonIndex,
+    activeCodon: action === 'translation'
+      ? sequence.mrnaCodons[state.roundState.currentCodonIndex] ?? null
+      : null,
+    changedDnaIndex: sequence.changedDnaIndex,
+    pendingAminoAcid: action === 'translation'
+      ? state.roundState.pendingTranslationChoice || null
+      : null,
     repairTarget: state.roundState.repairTarget,
     selectedFunction,
     feedbackTitle: state.feedback?.title ?? '',
     feedbackMessage: state.feedback?.message ?? '',
     stageComplete,
+    wheelObscured: state.isCodonWheelOpen,
   }
 }
 
@@ -90,11 +102,15 @@ export function buildSuccessSceneState(round: GameRound): FactorySceneSnapshot {
     transitionActive: action === 'function-test',
     codons: [...sequence.mrnaCodons],
     currentCodonIndex: 4,
+    activeCodon: action === 'translation' ? sequence.mrnaCodons[4] : null,
+    changedDnaIndex: sequence.changedDnaIndex,
+    pendingAminoAcid: null,
     repairTarget: null,
     selectedFunction,
     feedbackTitle: 'Action complete',
     feedbackMessage: 'Cargo is ready for the next production action.',
     stageComplete: true,
+    wheelObscured: false,
   }
 }
 

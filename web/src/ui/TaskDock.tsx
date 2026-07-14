@@ -1,19 +1,30 @@
 import { Check, Eraser, Lightbulb, RotateCcw } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import type { Feedback, GameRound, ProteinRound, RoundState, TranscriptionRound, TranslationRound } from '../types'
+import type { Feedback, FunctionReferenceRow, GameRound, ProteinRound, RoundState, TranscriptionRound, TranslationRound } from '../types'
+
+export interface TaskCompletion {
+  buttonLabel: string
+  changeBrief?: string
+  label: string
+  message: string
+  title: string
+}
 
 interface TaskDockProps {
+  completion: TaskCompletion | null
   feedback: Feedback | null
   onAppendBase: (base: string) => void
   onBackspace: () => void
   onCheckBaseRound: () => void
   onCheckTranslationCodon: () => void
   onClear: () => void
+  onContinue: () => void
   onGoToTranslationCodon: (index: number) => void
   onSelectFunctionRow: (rowId: string) => void
   onSelectTranslation: (index: number, value: string) => void
   onCheckFunctionTest: () => void
   onToggleHint: () => void
+  originalFunctionRowId: string
   round: GameRound
   roundNumber: number
   roundState: RoundState
@@ -21,21 +32,24 @@ interface TaskDockProps {
 }
 
 export function TaskDock({
+  completion,
   feedback,
   onAppendBase,
   onBackspace,
   onCheckBaseRound,
   onCheckTranslationCodon,
   onClear,
+  onContinue,
   onGoToTranslationCodon,
   onSelectFunctionRow,
   onSelectTranslation,
   onCheckFunctionTest,
   onToggleHint,
+  originalFunctionRowId,
   round,
   roundState,
 }: TaskDockProps) {
-  const visibleFeedback = feedback?.kind === 'info' ? null : feedback
+  const visibleFeedback = feedback?.kind === 'error' ? feedback : null
   const feedbackRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -44,13 +58,13 @@ export function TaskDock({
 
   return (
     <section
-      className={`task-dock ${round.type} ${roundState.repairTarget ? 'repair-mode' : ''}`}
+      className={`task-dock ${round.type} ${roundState.repairTarget ? 'repair-mode' : ''} ${completion ? 'is-complete' : ''}`}
       aria-labelledby="task-dock-title"
       data-testid="task-dock"
     >
       <header className="task-dock-header">
         <div>
-          <p className="eyebrow">Action {round.context.action === 'transcription' ? 1 : round.context.action === 'translation' ? 2 : 3} of 3</p>
+          <p className="eyebrow">{proteinLabel(round.context.sequenceIndex)}</p>
           <h2 id="task-dock-title">{actionTitle(round)}</h2>
         </div>
         <p>{round.prompt}</p>
@@ -59,38 +73,55 @@ export function TaskDock({
       {visibleFeedback && (
         <div className={`inline-feedback ${visibleFeedback.kind}`} ref={feedbackRef} role="status" tabIndex={-1}>
           <strong>{visibleFeedback.title}</strong>
-          <span>{visibleFeedback.message}</span>
-          {visibleFeedback.detail && <small>{visibleFeedback.detail}</small>}
+          <span>{visibleFeedback.detail ?? visibleFeedback.message}</span>
         </div>
       )}
 
-      {round.type === 'transcription' ? (
-        <TranscriptionTask
-          onAppendBase={onAppendBase}
-          onBackspace={onBackspace}
-          onCheck={onCheckBaseRound}
-          onClear={onClear}
-          onToggleHint={onToggleHint}
-          round={round}
-          roundState={roundState}
-        />
-      ) : round.type === 'translation' ? (
-        <TranslationTask
-          onCheck={onCheckTranslationCodon}
-          onGoToCodon={onGoToTranslationCodon}
-          onSelect={onSelectTranslation}
-          onToggleHint={onToggleHint}
-          round={round}
-          roundState={roundState}
-        />
-      ) : (
-        <FunctionTask
-          onCheck={onCheckFunctionTest}
-          onSelect={onSelectFunctionRow}
-          onToggleHint={onToggleHint}
-          round={round}
-          roundState={roundState}
-        />
+      <fieldset className="task-content" disabled={Boolean(completion)}>
+        {round.type === 'transcription' ? (
+          <TranscriptionTask
+            onAppendBase={onAppendBase}
+            onBackspace={onBackspace}
+            onCheck={onCheckBaseRound}
+            onClear={onClear}
+            onToggleHint={onToggleHint}
+            round={round}
+            roundState={roundState}
+          />
+        ) : round.type === 'translation' ? (
+          <TranslationTask
+            onCheck={onCheckTranslationCodon}
+            onGoToCodon={onGoToTranslationCodon}
+            onSelect={onSelectTranslation}
+            onToggleHint={onToggleHint}
+            round={round}
+            roundState={roundState}
+          />
+        ) : (
+          <FunctionTask
+            onCheck={onCheckFunctionTest}
+            onSelect={onSelectFunctionRow}
+            onToggleHint={onToggleHint}
+            originalFunctionRowId={originalFunctionRowId}
+            round={round}
+            roundState={roundState}
+          />
+        )}
+      </fieldset>
+
+      {completion && (
+        <div className="completion-shelf" data-testid="shipment-overlay" role="status">
+          <span className="completion-check"><Check aria-hidden="true" size={21} /></span>
+          <div>
+            <small>{completion.label}</small>
+            <strong>{completion.title}</strong>
+            <span>{completion.message}</span>
+            {completion.changeBrief && <span className="change-brief">{completion.changeBrief}</span>}
+          </div>
+          <button className="primary-action compact" onClick={onContinue} type="button">
+            {completion.buttonLabel}
+          </button>
+        </div>
       )}
     </section>
   )
@@ -155,8 +186,6 @@ function TranscriptionTask({
       </div>
 
       <div className="sequence-labels" aria-hidden="true"><span>DNA</span><span>mRNA</span></div>
-
-      {repairIndex >= 0 && <p className="repair-callout">Repair highlighted slot {repairIndex + 1}.</p>}
 
       <div className="action-shelf">
         <div className="base-grid" role="group" aria-label="RNA bases">
@@ -232,12 +261,6 @@ function TranslationTask({
         </div>
       </div>
 
-      {repairIndex >= 0 && (
-        <p className="repair-callout">
-          Recheck codon {repairIndex + 1} with the codon wheel, then choose its matching signal.
-        </p>
-      )}
-
       <div className="chain-builder" aria-label="Amino acid chain with four slots followed by a stop signal">
         <span className="chain-label">Chain</span>
         {Array.from({ length: 4 }, (_, index) => (
@@ -261,44 +284,50 @@ function FunctionTask({
   onCheck,
   onSelect,
   onToggleHint,
+  originalFunctionRowId,
   round,
   roundState,
 }: {
   onCheck: () => void
   onSelect: (rowId: string) => void
   onToggleHint: () => void
+  originalFunctionRowId: string
   round: ProteinRound
   roundState: RoundState
 }) {
-  const visibleRows = round.referenceRows.filter((row) => roundState.narrowedChoices.length === 0 || roundState.narrowedChoices.includes(row.id))
+  const allowedRows = round.referenceRows.filter((row) => roundState.narrowedChoices.length === 0 || roundState.narrowedChoices.includes(row.id))
+  const visibleRows = round.context.sequenceIndex === 0
+    ? allowedRows
+    : variantOutcomeRows(allowedRows, round.referenceRows, originalFunctionRowId, round.correctRowId)
+  const isVariant = round.context.sequenceIndex > 0
 
   return (
     <div className="task-surface function-workbench">
       <div className="chain-under-test"><span>Completed chain</span><strong>{round.chain}</strong></div>
       <p className="model-disclaimer">Fictional fur-color practice model. In real organisms, an amino-acid change may or may not change protein function, and fur color involves multiple genes and regulatory pathways.</p>
-      <div className="function-table" role="radiogroup" aria-label="Fictional fur-color model matching rows">
-        <div className="function-table-head" aria-hidden="true">
+      <div className={`function-table ${isVariant ? 'variant-outcomes' : ''}`} role="radiogroup" aria-label="Fictional fur-color model matching rows">
+        {!isVariant && <div className="function-table-head" aria-hidden="true">
           <span>Amino acid sequence</span><span>Protein function</span><span>Expressed trait</span>
-        </div>
-        {visibleRows.map((row) => {
+        </div>}
+        {visibleRows.map((row, index) => {
           const selected = roundState.selectedFunctionRowId === row.id
           return (
             <button
               aria-checked={selected}
-              className={`function-row ${selected ? 'selected' : ''} ${roundState.repairTarget?.kind === 'function-row' && selected ? 'repair-target' : ''}`}
+              className={`function-row ${isVariant ? 'outcome-card' : ''} ${selected ? 'selected' : ''} ${roundState.repairTarget?.kind === 'function-row' && selected ? 'repair-target' : ''}`}
               key={row.id}
               onClick={() => onSelect(row.id)}
               role="radio"
               type="button"
             >
-              <span><b>{row.aminoAcidSequence.join(' - ')}</b></span>
-              <span>{row.proteinFunction}</span>
-              <span><i className={`trait-swatch ${row.traitColor}`} aria-hidden="true" /><b>{row.expressedTrait}</b></span>
+              {isVariant && <small className="outcome-comparison">Candidate {index + 1}</small>}
+              <span><small>Amino acid chain</small><b>{row.aminoAcidSequence.join(' - ')}</b></span>
+              <span><small>Modeled function</small>{row.proteinFunction}</span>
+              <span><small>Trait</small><i className={`trait-swatch ${row.traitColor}`} aria-hidden="true" /><b>{row.expressedTrait}</b></span>
             </button>
           )
         })}
       </div>
-      {roundState.repairTarget?.kind === 'function-row' && <p className="repair-callout">Compare all four amino acids and select the matching row.</p>}
       <div className="action-shelf function-action">
         <HintBlock hint={round.hint} isOpen={roundState.showHint} onToggle={onToggleHint} />
         <button className="primary-action" disabled={!roundState.selectedFunctionRowId} onClick={onCheck} type="button"><Check aria-hidden="true" size={22} /> Check Match</button>
@@ -320,4 +349,27 @@ function actionTitle(round: GameRound): string {
   if (round.type === 'transcription') return 'Build the mRNA'
   if (round.type === 'translation') return 'Build the amino acid chain'
   return 'Function Test'
+}
+
+function proteinLabel(sequenceIndex: number): string {
+  if (sequenceIndex === 0) return 'Protein 1: Original'
+  if (sequenceIndex === 1) return 'Protein 2: One-base change'
+  return 'Protein 3: Another one-base change'
+}
+
+function variantOutcomeRows(
+  allowedRows: FunctionReferenceRow[],
+  allRows: FunctionReferenceRow[],
+  originalRowId: string,
+  correctRowId: string,
+): FunctionReferenceRow[] {
+  const preferredIds = new Set([originalRowId, correctRowId])
+  for (const row of allRows) {
+    if (preferredIds.size >= 3) break
+    preferredIds.add(row.id)
+  }
+  const preferredRows = allRows.filter((row) => preferredIds.has(row.id))
+  const narrowedIds = new Set(allowedRows.map((row) => row.id))
+  const narrowedPreferred = preferredRows.filter((row) => narrowedIds.has(row.id))
+  return narrowedPreferred.length > 0 ? narrowedPreferred : allowedRows.slice(0, 3)
 }

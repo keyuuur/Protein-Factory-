@@ -95,63 +95,76 @@ export function EndScreen({ navigationBlocked, payload, saveResult, onReplay, on
 
   return (
     <main className="end-screen" data-testid="end-screen">
-      <section className="end-summary" aria-labelledby="end-title">
-        <span className="trophy-mark"><Trophy aria-hidden="true" size={44} /></span>
-        <p className="eyebrow">Factory run complete</p>
-        <h1 id="end-title">{payload.factoryRating} Production</h1>
-        <p className="end-completion"><strong>{payload.score}</strong> of 9 actions completed ({payload.completionPercent}%)</p>
-        <p className="end-score"><strong>{payload.independentStages}</strong> of 9 completed actions were independent</p>
-        <div
-          aria-label={`${payload.independencePercent}% independent`}
-          aria-valuemax={100}
-          aria-valuemin={0}
-          aria-valuenow={payload.independencePercent}
-          className="score-meter"
-          role="progressbar"
-        >
-          <span style={{ width: `${payload.independencePercent}%` }} />
-        </div>
-        <dl className="score-grid">
-          <div><dt>Clean actions</dt><dd>{payload.cleanRounds}</dd></div>
-          <div><dt>With support</dt><dd>{payload.supportedRounds}</dd></div>
-          <div><dt>Repairs</dt><dd>{payload.repairs}</dd></div>
-          <div><dt>Time</dt><dd>{formatTime(payload.timeSpent)}</dd></div>
-        </dl>
-      </section>
+      <section className="end-first-view">
+        <section className="end-summary" aria-labelledby="end-title">
+          <span className="trophy-mark"><Trophy aria-hidden="true" size={36} /></span>
+          <div className="rating-copy">
+            <p className="eyebrow">Factory run complete</p>
+            <h1 id="end-title">{payload.factoryRating} Production</h1>
+            <p className="end-completion"><strong>{payload.score}/9</strong> completed</p>
+          </div>
+          <div className="independence-result">
+            <span>Independent work</span>
+            <strong>{payload.independentStages}/9 independently</strong>
+            <small>({payload.independencePercent}%)</small>
+          </div>
+          <div
+            aria-label={`${payload.independencePercent}% independent`}
+            aria-valuemax={100}
+            aria-valuemin={0}
+            aria-valuenow={payload.independencePercent}
+            className="score-meter"
+            role="progressbar"
+          >
+            <span style={{ width: `${payload.independencePercent}%` }} />
+          </div>
+          <dl className="score-grid">
+            <div><dt>Clean</dt><dd>{payload.cleanRounds}</dd></div>
+            <div><dt>Supported</dt><dd>{payload.supportedRounds}</dd></div>
+            <div><dt>Repairs</dt><dd>{payload.repairs}</dd></div>
+            <div><dt>Time</dt><dd>{formatTime(payload.timeSpent)}</dd></div>
+          </dl>
+        </section>
 
-      <section className="end-products" aria-labelledby="products-title">
-        <div className="end-section-title">
-          <div><p className="eyebrow">Comparison tray</p><h2 id="products-title">Your three protein products</h2></div>
-          <span className={submissionClass(submissionStatus, saveResult)}>{submissionLabel(submissionStatus, saveResult)}</span>
-        </div>
-        <div className="product-results">
-          {payload.completedProducts.map((product, index) => (
-            <article key={product.sequenceId}>
-              <header><span>Protein {index + 1}</span><strong>{product.label}</strong></header>
-              <dl>
-                <div><dt>DNA</dt><dd>{groupCodons(product.dnaStrand)}</dd></div>
-                <div><dt>mRNA</dt><dd>{groupCodons(product.mrna)}</dd></div>
-                <div><dt>Chain</dt><dd>{product.aminoAcidChain.join(' - ')}</dd></div>
-                <div><dt>Function</dt><dd>{product.proteinFunction}</dd></div>
-              </dl>
-              <p className="product-trait"><i className={`trait-swatch ${product.traitColor}`} aria-hidden="true" />{product.expressedTrait}</p>
-            </article>
-          ))}
-        </div>
-        <p className="model-disclaimer">These outcomes belong to the fictional fur-color practice model. Real amino-acid changes may or may not alter protein function, and real fur color involves multiple genes and regulatory pathways.</p>
-      </section>
+        <section className="end-products" aria-labelledby="products-title">
+          <div className="end-section-title">
+            <div><p className="eyebrow">Comparison tray</p><h2 id="products-title">Your three protein products</h2></div>
+            <span className={submissionClass(submissionStatus, saveResult)}>{submissionLabel(submissionStatus, saveResult)}</span>
+          </div>
+          <div className="product-results">
+            {payload.completedProducts.map((product, index) => (
+              <article key={product.sequenceId}>
+                <header><span>{proteinLabel(index)}</span></header>
+                <div className="product-main-result">
+                  <p><span>Amino acid chain</span><strong>{product.aminoAcidChain.join(' - ')}</strong></p>
+                  <p><span>Modeled function</span><strong>{product.proteinFunction}</strong></p>
+                  <p className="product-trait"><i className={`trait-swatch ${product.traitColor}`} aria-hidden="true" /><strong>{product.expressedTrait}</strong></p>
+                </div>
+                <details className="product-evidence">
+                  <summary>DNA and mRNA evidence</summary>
+                  <dl>
+                    <div><dt>DNA</dt><dd>{groupCodons(product.dnaStrand)}</dd></div>
+                    <div><dt>mRNA</dt><dd>{groupCodons(product.mrna)}</dd></div>
+                  </dl>
+                </details>
+              </article>
+            ))}
+          </div>
+          <p className="model-disclaimer">These outcomes belong to the fictional fur-color practice model. Real amino-acid changes may or may not alter protein function, and real fur color involves multiple genes and regulatory pathways.</p>
+        </section>
 
-      <section className="end-actions-panel">
-        <div>
-          <p className="eyebrow">Replay goal</p>
-          <h2>{payload.replayGoal}</h2>
-          {payload.activeReplayChallenge && <p className={payload.replayChallengeMet ? 'challenge-result met' : 'challenge-result'}>{payload.replayChallengeMet ? 'Replay challenge met' : 'Replay challenge still open'}</p>}
-        </div>
-        <div className="end-actions">
-          <button className="primary-action" disabled={navigationBlocked} onClick={onReplay} type="button"><RotateCcw aria-hidden="true" size={21} /> Replay</button>
-          <button className="secondary-action" disabled={navigationBlocked} onClick={onRestart} type="button"><Home aria-hidden="true" size={21} /> New student</button>
-        </div>
-        {navigationBlocked && <p role="alert">Export this result or choose Leave without saving before starting another run.</p>}
+        <section className="end-actions-panel">
+          <div>
+            <p className="eyebrow">Replay goal</p>
+            <h2>{payload.replayGoal}</h2>
+            {payload.activeReplayChallenge && <p className={payload.replayChallengeMet ? 'challenge-result met' : 'challenge-result'}>{payload.replayChallengeMet ? 'Replay challenge met' : 'Replay challenge still open'}</p>}
+          </div>
+          <div className="end-actions">
+            <button className="primary-action" disabled={navigationBlocked} onClick={onReplay} type="button"><RotateCcw aria-hidden="true" size={21} /> Replay</button>
+            <button className="secondary-action" disabled={navigationBlocked} onClick={onRestart} type="button"><Home aria-hidden="true" size={21} /> New student</button>
+          </div>
+          {navigationBlocked && <p role="alert">Export this result or choose Leave without saving before starting another run.</p>}
+        </section>
       </section>
 
       <details className="teacher-results">
@@ -169,6 +182,12 @@ export function EndScreen({ navigationBlocked, payload, saveResult, onReplay, on
 
 function groupCodons(sequence: string): string {
   return sequence.match(/.{1,3}/g)?.join(' ') ?? sequence
+}
+
+function proteinLabel(index: number): string {
+  if (index === 0) return 'Protein 1: Original'
+  if (index === 1) return 'Protein 2: One-base change'
+  return 'Protein 3: Another one-base change'
 }
 
 function formatTime(totalSeconds: number): string {

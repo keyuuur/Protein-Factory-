@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   toProteinFactoryAttemptV4,
   type ProteinFactoryAttemptV3,
@@ -15,6 +15,8 @@ import { SubmissionCoordinator } from '../../src/results/submissionCoordinator'
 import { createInitialGameState, gameReducer } from '../../src/game/simulation/gameReducer'
 import { buildFinalPayload } from '../../src/results/gameResults'
 import type { FinalGamePayload, GameSessionState, ProteinFactoryAttemptV4 } from '../../src/types'
+
+afterEach(() => vi.useRealTimers())
 
 describe('submission queue V2', () => {
   it('keys solely by immutable attempt ID and keeps the first payload', async () => {
@@ -162,9 +164,60 @@ describe('submission queue V2', () => {
 
     expect(results[0]).toMatchObject({ retryCount: 0, status: 'waiting-for-connection' })
   })
+
+  it('times out a stalled fetch and keeps the immutable payload queued for retry', async () => {
+    const repository = new MemoryResultRepository('local-storage')
+    const attempt = v4Attempt('pf-stalled-fetch', { attemptKind: 'full', score: 7 })
+    const original = structuredClone(attempt)
+    await queueSubmission(attempt, repository, 50_000)
+    let requestSignal: AbortSignal | null | undefined
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal
+      return new Promise<Response>(() => {})
+    })
+    vi.useFakeTimers()
+
+    const drain = retryPendingSubmissions({
+      fetcher,
+      isOnline: () => true,
+      now: () => 50_000,
+      repository,
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(requestSignal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(10_000)
+    const results = await drain
+
+    expect(requestSignal?.aborted).toBe(true)
+    expect(results[0]).toMatchObject({
+      attempt: original,
+      error: 'Submission request timed out.',
+      retryCount: 1,
+      status: 'waiting-for-connection',
+    })
+    expect(Date.parse(results[0].nextRetryAt ?? '')).toBe(55_000)
+    expect(attempt).toEqual(original)
+  })
 })
 
 describe('submission coordinator recovery', () => {
+  it('finishes startup without waiting for the pending queue drain', async () => {
+    const repository = new MemoryResultRepository('local-storage')
+    await queueSubmission(v4Attempt('pf-startup-pending'), repository)
+    let resolveRequest: ((response: Response) => void) | undefined
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => { resolveRequest = resolve }))
+    const coordinator = new SubmissionCoordinator({ fetcher, isOnline: () => true, repository })
+
+    await coordinator.start()
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce())
+    expect(coordinator.getAttemptState('pf-startup-pending').status).toBe('saving')
+
+    resolveRequest?.(jsonResponse({ ok: true }, 200))
+    await vi.waitFor(() => expect(coordinator.getAttemptState('pf-startup-pending').status).toBe('submitted'))
+    coordinator.stop()
+  })
+
   it('guards a memory-only result and round-trips recovery JSON', async () => {
     const repository = new MemoryResultRepository()
     const fetcher = vi.fn(async () => { throw new TypeError('Offline') })
@@ -220,10 +273,13 @@ function completedResult(): FinalGamePayload {
     if (!state.roundResults.some((result) => result.round === state.currentRoundIndex + 1)) {
       const round = state.runManifest.rounds[state.currentRoundIndex]
       if (round.type === 'transcription') {
-        state = [...round.answer].reduce((current, base) => gameReducer(current, { type: 'APPEND_BASE', base }), state)
+        for (const [index, base] of [...round.answer].entries()) {
+          if (state.roundState.input[index] !== base) state = gameReducer(state, { type: 'APPEND_BASE', base })
+        }
         state = gameReducer(state, { type: 'CHECK_BASE_ROUND' })
       } else if (round.type === 'translation') {
         for (let index = 0; index < round.answers.length; index += 1) {
+          if (state.roundState.answers[index] === round.answers[index]) continue
           state = gameReducer(state, { type: 'SELECT_TRANSLATION', index, value: round.answers[index] })
           state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
         }

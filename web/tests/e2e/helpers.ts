@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { PNG } from 'pngjs'
@@ -86,8 +86,11 @@ export async function completeCurrentAction(page: Page): Promise<GameSessionStat
 
   if (round.type === 'transcription') {
     for (const [index, base] of [...round.answer].entries()) {
-      const button = dock.getByRole('button', { exact: true, name: base })
       const slot = dock.locator('[aria-label^="mRNA slot"]').nth(index)
+      const slotLabel = await slot.getAttribute('aria-label')
+      if (slotLabel === `mRNA slot ${index + 1}, ${base}`) continue
+
+      const button = dock.getByRole('button', { exact: true, name: base })
       await button.click()
       try {
         await expect(slot).toHaveAttribute('aria-label', `mRNA slot ${index + 1}, ${base}`, { timeout: 1_500 })
@@ -98,7 +101,9 @@ export async function completeCurrentAction(page: Page): Promise<GameSessionStat
     }
     await dock.getByRole('button', { name: 'Check mRNA' }).click()
   } else if (round.type === 'translation') {
+    const state = await currentState(page)
     for (let index = 0; index < round.answers.length; index += 1) {
+      if (state.roundState.answers[index] === round.answers[index]) continue
       const answer = round.answers[index]
       await dock.getByRole('group', { name: `Signals for ${round.codons[index]}` })
         .getByRole('button', { exact: true, name: answer })
@@ -163,37 +168,106 @@ export async function assertNoHorizontalOverflow(page: Page) {
 }
 
 export async function assertCanvasIsRendered(page: Page) {
-  const canvas = page.getByTestId('factory-canvas').locator('canvas')
+  const host = page.getByTestId('factory-canvas')
+  await expect(host).toHaveAttribute('data-render-settled', 'true', { timeout: 1_500 })
+  const canvas = host.locator('canvas')
   await expect(canvas).toBeVisible()
   const buffer = await canvas.screenshot()
   const png = PNG.sync.read(buffer)
   const total = png.width * png.height
   let nearBlack = 0
   let colored = 0
+  let transparent = 0
 
   for (let index = 0; index < png.data.length; index += 4) {
     const [red, green, blue, alpha] = png.data.subarray(index, index + 4)
+    if (alpha < 250) transparent += 1
     if (alpha > 0 && red < 15 && green < 15 && blue < 15) nearBlack += 1
     if (alpha > 0 && Math.max(red, green, blue) - Math.min(red, green, blue) > 12) colored += 1
   }
 
   expect(total).toBeGreaterThan(0)
+  expect(transparent / total, 'canvas should be an opaque laboratory frame').toBeLessThan(0.01)
   expect(nearBlack / total, 'canvas should not be an all-black WebGL frame').toBeLessThan(0.9)
-  expect(colored / total, 'canvas should contain rendered color').toBeGreaterThan(0.005)
+  expect(colored / total, 'canvas should contain meaningful non-background color').toBeGreaterThan(0.01)
 }
 
 export async function capturePng(page: Page, testInfo: TestInfo, stateName: string) {
   await assertNoHorizontalOverflow(page)
+  if (await page.getByTestId('factory-canvas').count()) await assertCanvasIsRendered(page)
   await mkdir(screenshotDirectory, { recursive: true })
   const fileName = `v4-${testInfo.project.name}-${stateName}.png`
-  await page.screenshot({ fullPage: true, path: path.join(screenshotDirectory, fileName) })
+  const filePath = path.join(screenshotDirectory, fileName)
+  await rasterizeFactoryCanvas(page)
+  try {
+    await page.screenshot({ fullPage: true, path: filePath })
+  } finally {
+    await restoreFactoryCanvas(page)
+  }
+  await assertFullPageCapture(filePath)
 }
 
 export async function captureViewportPng(page: Page, testInfo: TestInfo, stateName: string) {
   await assertNoHorizontalOverflow(page)
+  if (await page.getByTestId('factory-canvas').count()) await assertCanvasIsRendered(page)
   await mkdir(screenshotDirectory, { recursive: true })
   const fileName = `v4-${testInfo.project.name}-${stateName}.png`
-  await page.screenshot({ fullPage: false, path: path.join(screenshotDirectory, fileName) })
+  const filePath = path.join(screenshotDirectory, fileName)
+  await rasterizeFactoryCanvas(page)
+  try {
+    await page.screenshot({ fullPage: false, path: filePath })
+  } finally {
+    await restoreFactoryCanvas(page)
+  }
+  await assertFullPageCapture(filePath)
+}
+
+async function rasterizeFactoryCanvas(page: Page) {
+  await page.evaluate(() => {
+    document.querySelectorAll<HTMLElement>('[data-testid="factory-canvas"]').forEach((host) => {
+      const canvas = host.querySelector('canvas')
+      if (!canvas) return
+      const image = document.createElement('img')
+      image.alt = ''
+      image.dataset.playwrightCanvasRaster = 'true'
+      image.src = canvas.toDataURL('image/png')
+      Object.assign(image.style, {
+        height: '100%',
+        inset: '0',
+        objectFit: 'cover',
+        pointerEvents: 'none',
+        position: 'absolute',
+        width: '100%',
+        zIndex: '1',
+      })
+      canvas.dataset.playwrightCaptureHidden = 'true'
+      canvas.style.visibility = 'hidden'
+      host.appendChild(image)
+    })
+  })
+  await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('[data-playwright-canvas-raster="true"]')]
+    .every((image) => image.complete && image.naturalWidth > 0))
+}
+
+async function restoreFactoryCanvas(page: Page) {
+  await page.evaluate(() => {
+    document.querySelectorAll('[data-playwright-canvas-raster="true"]').forEach((image) => image.remove())
+    document.querySelectorAll<HTMLCanvasElement>('canvas[data-playwright-capture-hidden="true"]').forEach((canvas) => {
+      canvas.style.visibility = ''
+      delete canvas.dataset.playwrightCaptureHidden
+    })
+  })
+}
+
+async function assertFullPageCapture(filePath: string) {
+  const png = PNG.sync.read(await readFile(filePath))
+  const total = png.width * png.height
+  let pureBlack = 0
+  for (let index = 0; index < png.data.length; index += 4) {
+    const [red, green, blue, alpha] = png.data.subarray(index, index + 4)
+    if (alpha > 0 && red < 8 && green < 8 && blue < 8) pureBlack += 1
+  }
+  expect(pureBlack / total, 'full-page capture should not contain black compositor tiles').toBeLessThan(0.05)
 }
 
 export function countDifferences(left: string, right: string): number {

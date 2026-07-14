@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createInitialGameState, gameReducer } from '../../src/game/simulation/gameReducer'
+import {
+  createInitialGameState,
+  gameReducer,
+  normalizeResumedGameState,
+  selectVariantFocus,
+} from '../../src/game/simulation/gameReducer'
 import { buildFinalPayload } from '../../src/results/gameResults'
 import { toProteinFactoryAttemptV4 } from '../../src/results/appsScriptMapper'
 import {
@@ -39,10 +44,52 @@ describe('V4 local persistence', () => {
 
     expect(restored?.schemaVersion).toBe(checkpointSchemaVersion)
     expect(restored?.state).toEqual(state)
-    expect(restored?.state.roundState.currentCodonIndex).toBe(2)
+    expect(restored?.state.roundState.currentCodonIndex).toBe(state.roundState.currentCodonIndex)
     expect(restored?.state.roundState.repairTarget?.kind).toBe('codon')
     expect(restored?.state.completedProducts).toHaveLength(1)
     expect(restored?.state.runManifest.seed).toBe(state.runManifest.seed)
+  })
+
+  it('normalizes a resumed legacy-style variant cursor without changing saved evidence', () => {
+    let state = startReducerRun()
+    for (let index = 0; index < 4; index += 1) state = completeAndContinue(state)
+    const round = state.runManifest.rounds[state.currentRoundIndex]
+    if (round.type !== 'translation') throw new Error('Expected variant translation fixture round')
+    const focus = selectVariantFocus(round)!
+    const legacyRoundState = {
+      ...state.roundState,
+      answers: new Array(round.answers.length).fill(''),
+      attempts: 4,
+      currentCodonIndex: 0,
+      hintUsed: true,
+      mistakes: 2,
+      pendingTranslationChoice: '',
+      showHint: true,
+      supportEvents: [{
+        action: 'translation' as const,
+        affectsIndependence: true,
+        attempt: 4,
+        choices: [],
+        kind: 'error-location-rule' as const,
+        location: 'legacy codon',
+        rule: 'legacy rule',
+      }],
+    }
+    state = { ...state, roundState: legacyRoundState }
+
+    expect(saveLocalCheckpoint(state)).toEqual({ ok: true })
+    const restored = readLocalCheckpoint()!
+    const normalized = normalizeResumedGameState(restored.state)
+
+    expect(normalized.roundResults).toBe(restored.state.roundResults)
+    expect(normalized.missedSkills).toBe(restored.state.missedSkills)
+    expect(normalized.completedProducts).toBe(restored.state.completedProducts)
+    expect(normalized.roundState).toMatchObject({ attempts: 4, hintUsed: true, mistakes: 2, showHint: true })
+    expect(normalized.roundState.supportEvents).toBe(restored.state.roundState.supportEvents)
+    expect(normalized.roundState.currentCodonIndex).toBe(focus.changedCodonIndex)
+    expect(normalized.roundState.answers).toEqual(
+      round.answers.map((answer, index) => index === focus.changedCodonIndex ? '' : answer),
+    )
   })
 
   it('rejects an incompatible V3 checkpoint without deleting V3 completed history', () => {
@@ -185,12 +232,11 @@ function makeCheckpointState(): GameSessionState {
   for (let index = 0; index < 4; index += 1) state = completeAndContinue(state)
   const round = state.runManifest.rounds[state.currentRoundIndex]
   if (round.type !== 'translation') throw new Error('Expected translation fixture round')
-  for (let index = 0; index < 2; index += 1) {
-    state = gameReducer(state, { type: 'SELECT_TRANSLATION', index, value: round.answers[index] })
-    state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
-  }
-  const wrong = round.codonChoices[2].find((choice) => choice !== round.answers[2])!
-  state = gameReducer(state, { type: 'SELECT_TRANSLATION', index: 2, value: wrong })
+  const focus = selectVariantFocus(round)
+  if (!focus) throw new Error('Expected focused variant translation round')
+  const index = focus.changedCodonIndex
+  const wrong = round.codonChoices[index].find((choice) => choice !== round.answers[index])!
+  state = gameReducer(state, { type: 'SELECT_TRANSLATION', index, value: wrong })
   state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
   state = gameReducer(state, { type: 'TOGGLE_HINT' })
   return { ...state, elapsedSeconds: 45 }
@@ -229,11 +275,15 @@ function completeCurrentAction(state: GameSessionState): GameSessionState {
   const round = state.runManifest.rounds[state.currentRoundIndex]
   let next = state
   if (round.type === 'transcription') {
-    next = [...round.answer].reduce((current, base) => gameReducer(current, { type: 'APPEND_BASE', base }), next)
+    const focus = selectVariantFocus(round)
+    next = focus
+      ? gameReducer(next, { type: 'APPEND_BASE', base: round.answer[focus.changedMrnaIndex] })
+      : [...round.answer].reduce((current, base) => gameReducer(current, { type: 'APPEND_BASE', base }), next)
     return gameReducer(next, { type: 'CHECK_BASE_ROUND' })
   }
   if (round.type === 'translation') {
-    for (let index = next.roundState.currentCodonIndex; index < round.answers.length; index += 1) {
+    while (!next.roundResults.some((result) => result.round === next.currentRoundIndex + 1)) {
+      const index = next.roundState.currentCodonIndex
       next = gameReducer(next, { type: 'SELECT_TRANSLATION', index, value: round.answers[index] })
       next = gameReducer(next, { type: 'CHECK_TRANSLATION_CODON' })
     }

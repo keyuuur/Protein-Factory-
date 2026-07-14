@@ -22,6 +22,18 @@ import type {
   SupportEvent,
   TeacherSettings,
 } from '../../types'
+import {
+  buildVariantTranscriptionInput,
+  buildVariantTranslationAnswers,
+  selectVariantFocus,
+  variantInputBlank,
+} from './variantFocus'
+
+export {
+  selectCurrentVariantComparisonConsequences,
+  selectVariantComparisonConsequences,
+  selectVariantFocus,
+} from './variantFocus'
 
 export type GameAction =
   | { type: 'START_GAME'; demoMode: boolean; firstName: string; period: string; settings: TeacherSettings; now: number }
@@ -52,12 +64,15 @@ const defaultSettings: TeacherSettings = {
 }
 
 export function createRoundState(round: GameRound): RoundState {
+  const focus = selectVariantFocus(round)
+  const variantInput = round.type === 'transcription' ? buildVariantTranscriptionInput(round) : null
+  const variantAnswers = round.type === 'translation' ? buildVariantTranslationAnswers(round) : null
   return {
-    answers: round.type === 'translation' ? new Array(round.codons.length).fill('') : [],
+    answers: round.type === 'translation' ? variantAnswers ?? new Array(round.codons.length).fill('') : [],
     attempts: 0,
-    currentCodonIndex: 0,
+    currentCodonIndex: round.type === 'translation' ? focus?.changedCodonIndex ?? 0 : 0,
     hintUsed: false,
-    input: '',
+    input: variantInput ?? '',
     mistakes: 0,
     narrowedChoices: [],
     pendingTranslationChoice: '',
@@ -66,6 +81,14 @@ export function createRoundState(round: GameRound): RoundState {
     showHint: false,
     supportEvents: [],
   }
+}
+
+export function normalizeResumedGameState(state: GameSessionState): GameSessionState {
+  if (state.screen !== 'playing' || isCurrentRoundComplete(state)) return state
+  const round = state.runManifest.rounds[state.currentRoundIndex]
+  if (!round || !selectVariantFocus(round)) return state
+  const roundState = normalizeVariantRoundState(round, state.roundState)
+  return roundState === state.roundState ? state : { ...state, roundState }
 }
 
 export function createInitialGameState(now = Date.now()): GameSessionState {
@@ -99,6 +122,7 @@ export function createInitialGameState(now = Date.now()): GameSessionState {
 }
 
 export function gameReducer(state: GameSessionState, action: GameAction): GameSessionState {
+  state = normalizeResumedGameState(state)
   const currentRound = state.runManifest.rounds[state.currentRoundIndex]
 
   switch (action.type) {
@@ -121,17 +145,9 @@ export function gameReducer(state: GameSessionState, action: GameAction): GameSe
     case 'APPEND_BASE':
       return appendBase(state, currentRound, action.base)
     case 'CLEAR_INPUT':
-      return currentRound.type === 'transcription' && canEditRound(state)
-        ? { ...state, feedback: null, roundState: { ...state.roundState, input: '', repairTarget: null } }
-        : state
+      return clearTranscriptionInput(state, currentRound)
     case 'BACKSPACE':
-      return currentRound.type === 'transcription' && canEditRound(state)
-        ? {
-            ...state,
-            feedback: null,
-            roundState: { ...state.roundState, input: state.roundState.input.slice(0, -1), repairTarget: null },
-          }
-        : state
+      return backspaceTranscriptionInput(state, currentRound)
     case 'CHECK_BASE_ROUND':
       return checkBaseRound(state, currentRound)
     case 'SELECT_TRANSLATION':
@@ -192,6 +208,94 @@ function isCurrentRoundComplete(state: GameSessionState): boolean {
   return state.roundResults.some((result) => result.round === state.currentRoundIndex + 1 && result.correct)
 }
 
+function normalizeVariantRoundState(round: GameRound, state: RoundState): RoundState {
+  const focus = selectVariantFocus(round)
+  if (!focus) return state
+
+  if (round.type === 'transcription') {
+    const draftBase = state.input[focus.changedMrnaIndex] ?? ''
+    const input = replaceAt(
+      round.answer,
+      focus.changedMrnaIndex,
+      round.options.some((base) => base === draftBase) ? draftBase : variantInputBlank,
+    )
+    const repairTarget = state.repairTarget?.kind === 'base' && state.repairTarget.index === focus.changedMrnaIndex
+      ? state.repairTarget
+      : null
+    const narrowedChoices = repairTarget ? state.narrowedChoices : []
+    if (
+      state.input === input
+      && state.answers.length === 0
+      && state.currentCodonIndex === 0
+      && state.pendingTranslationChoice === ''
+      && state.repairTarget === repairTarget
+      && sameStrings(state.narrowedChoices, narrowedChoices)
+    ) return state
+    return {
+      ...state,
+      answers: [],
+      currentCodonIndex: 0,
+      input,
+      narrowedChoices,
+      pendingTranslationChoice: '',
+      repairTarget,
+    }
+  }
+
+  if (round.type === 'translation') {
+    const answers = buildVariantTranslationAnswers(round)
+    if (!answers) return state
+    const choices = round.codonChoices[focus.changedCodonIndex] ?? []
+    const pendingCandidates = state.currentCodonIndex === focus.changedCodonIndex
+      ? [state.pendingTranslationChoice, state.answers[focus.changedCodonIndex]]
+      : [state.answers[focus.changedCodonIndex]]
+    const pendingTranslationChoice = pendingCandidates.find((choice) => choices.includes(choice)) ?? ''
+    const repairTarget = state.repairTarget?.kind === 'codon' && state.repairTarget.index === focus.changedCodonIndex
+      ? state.repairTarget
+      : null
+    const narrowedChoices = repairTarget ? state.narrowedChoices : []
+    if (
+      state.input === ''
+      && sameStrings(state.answers, answers)
+      && state.currentCodonIndex === focus.changedCodonIndex
+      && state.pendingTranslationChoice === pendingTranslationChoice
+      && state.repairTarget === repairTarget
+      && sameStrings(state.narrowedChoices, narrowedChoices)
+    ) return state
+    return {
+      ...state,
+      answers,
+      currentCodonIndex: focus.changedCodonIndex,
+      input: '',
+      narrowedChoices,
+      pendingTranslationChoice,
+      repairTarget,
+    }
+  }
+
+  return state
+}
+
+function clearTranscriptionInput(state: GameSessionState, round: GameRound): GameSessionState {
+  if (round.type !== 'transcription' || !canEditRound(state)) return state
+  const input = buildVariantTranscriptionInput(round) ?? ''
+  return {
+    ...state,
+    feedback: null,
+    roundState: { ...state.roundState, input, repairTarget: null },
+  }
+}
+
+function backspaceTranscriptionInput(state: GameSessionState, round: GameRound): GameSessionState {
+  if (round.type !== 'transcription' || !canEditRound(state)) return state
+  const input = buildVariantTranscriptionInput(round) ?? state.roundState.input.slice(0, -1)
+  return {
+    ...state,
+    feedback: null,
+    roundState: { ...state.roundState, input, repairTarget: null },
+  }
+}
+
 function appendBase(state: GameSessionState, round: GameRound, base: string): GameSessionState {
   if (round.type !== 'transcription' || !canEditRound(state) || !round.options.includes(base as never)) return state
   const repair = state.roundState.repairTarget
@@ -206,12 +310,19 @@ function appendBase(state: GameSessionState, round: GameRound, base: string): Ga
       },
     }
   }
+  const focus = selectVariantFocus(round)
+  if (focus) {
+    const input = replaceAt(round.answer, focus.changedMrnaIndex, base)
+    return input === state.roundState.input
+      ? state
+      : { ...state, feedback: null, roundState: { ...state.roundState, input } }
+  }
   if (state.roundState.input.length >= round.answer.length) return state
   return { ...state, feedback: null, roundState: { ...state.roundState, input: state.roundState.input + base } }
 }
 
 function checkBaseRound(state: GameSessionState, round: GameRound): GameSessionState {
-  if (round.type !== 'transcription' || !canEditRound(state) || state.roundState.input.length !== round.answer.length) return state
+  if (round.type !== 'transcription' || !canEditRound(state) || !isTranscriptionReady(round, state.roundState.input)) return state
   const attempted = { ...state.roundState, attempts: state.roundState.attempts + 1 }
   return attempted.input === round.answer
     ? completeRound(state, round, attempted, attempted.input)
@@ -264,12 +375,13 @@ function checkTranslationCodon(state: GameSessionState, round: GameRound): GameS
     pendingTranslationChoice: '',
     repairTarget: null,
   }
-  if (index === round.answers.length - 1) return completeRound(state, round, checked, answers.join('-'))
+  if (answers.every(Boolean)) return completeRound(state, round, checked, answers.join('-'))
 
+  const currentCodonIndex = firstOpenCodon(answers)
   return {
     ...state,
     feedback: { kind: 'info', title: 'Codon checked.', message: 'Select an answer for the next mRNA codon.' },
-    roundState: { ...checked, currentCodonIndex: index + 1 },
+    roundState: { ...checked, currentCodonIndex },
   }
 }
 
@@ -633,9 +745,19 @@ function translationSubmission(state: RoundState, index: number): string {
   return submitted.map((answer) => answer || 'blank').join('-')
 }
 
+function isTranscriptionReady(round: Extract<GameRound, { type: 'transcription' }>, input: string): boolean {
+  if (input.length !== round.answer.length) return false
+  const focus = selectVariantFocus(round)
+  return !focus || round.options.some((base) => base === input[focus.changedMrnaIndex])
+}
+
 function firstOpenCodon(answers: string[]): number {
   const index = answers.findIndex((answer) => !answer)
   return index === -1 ? answers.length - 1 : index
+}
+
+function sameStrings(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 function findFirstMismatch(submitted: string, expected: string): number {

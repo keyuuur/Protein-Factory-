@@ -12,7 +12,64 @@ import { SubmissionCoordinator } from '../../src/results/submissionCoordinator'
 import type { CheckpointEnvelopeV4, FinalGamePayload, GameSessionState } from '../../src/types'
 
 describe('BrowserResultRepository failure recovery', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('shares one initialization promise across concurrent callers', async () => {
+    const indexedDb = new FakeIndexedDb()
+    indexedDb.deferOpen = true
+    stubBrowser(indexedDb, controlledStorage())
+    const repository = new BrowserResultRepository()
+
+    const first = repository.initialize()
+    const second = repository.initialize()
+
+    expect(second).toBe(first)
+    expect(indexedDb.openCalls).toBe(1)
+    indexedDb.releaseOpen()
+    await Promise.all([first, second])
+    expect(repository.durability).toBe('indexeddb')
+  })
+
+  it('falls back after a pending IndexedDB open and closes its late database handle', async () => {
+    vi.useFakeTimers()
+    const indexedDb = new FakeIndexedDb()
+    indexedDb.deferOpen = true
+    stubBrowser(indexedDb, controlledStorage())
+    const repository = new BrowserResultRepository()
+
+    const initialization = repository.initialize()
+    await vi.advanceTimersByTimeAsync(2_000)
+    await initialization
+
+    expect(repository.durability).toBe('local-storage')
+    indexedDb.releaseOpen()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(indexedDb.closeCalls).toBe(1)
+    expect(repository.durability).toBe('local-storage')
+  })
+
+  it('falls back without losing a queue update when an IndexedDB transaction stalls', async () => {
+    const indexedDb = new FakeIndexedDb()
+    stubBrowser(indexedDb, controlledStorage())
+    const repository = new BrowserResultRepository()
+    await repository.initialize()
+    const result = completedResult('pf-stalled-transaction')
+    const item = queueItem(result, 'queued')
+    indexedDb.stallNextTransaction = true
+    vi.useFakeTimers()
+
+    const write = repository.putQueue([item])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(indexedDb.stalledTransactionCount).toBe(1)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await write
+
+    expect(repository.durability).toBe('local-storage')
+    expect((await repository.getQueue())[0]).toEqual(item)
+  })
 
   it('reconciles the complete fallback snapshot before a reload trusts stale IndexedDB', async () => {
     const indexedDb = new FakeIndexedDb()
@@ -176,13 +233,20 @@ class FailOnceRepository extends MemoryResultRepository {
 }
 
 class FakeIndexedDb {
+  closeCalls = 0
+  deferOpen = false
   failNextWrite = false
+  openCalls = 0
   readonly records = new Map<string, unknown>()
+  stallNextTransaction = false
+  stalledTransactionCount = 0
   private created = false
+  private readonly pendingOpens: Array<() => void> = []
 
   open(): IDBOpenDBRequest {
+    this.openCalls += 1
     const request = {} as IDBOpenDBRequest
-    queueMicrotask(() => {
+    const succeed = () => {
       const database = new FakeDatabase(this) as unknown as IDBDatabase
       Object.defineProperty(request, 'result', { configurable: true, value: database })
       if (!this.created) {
@@ -190,8 +254,21 @@ class FakeIndexedDb {
         request.onupgradeneeded?.(new Event('upgradeneeded') as IDBVersionChangeEvent)
       }
       request.onsuccess?.(new Event('success'))
-    })
+    }
+    if (this.deferOpen) this.pendingOpens.push(succeed)
+    else queueMicrotask(succeed)
     return request
+  }
+
+  releaseOpen(): void {
+    for (const succeed of this.pendingOpens.splice(0)) queueMicrotask(succeed)
+  }
+
+  takeStalledTransaction(): boolean {
+    if (!this.stallNextTransaction) return false
+    this.stallNextTransaction = false
+    this.stalledTransactionCount += 1
+    return true
   }
 }
 
@@ -200,11 +277,11 @@ class FakeDatabase {
 
   constructor(private readonly indexedDb: FakeIndexedDb) {}
 
-  close(): void {}
+  close(): void { this.indexedDb.closeCalls += 1 }
   createObjectStore(): IDBObjectStore { return {} as IDBObjectStore }
 
   transaction(_store: string, mode: IDBTransactionMode): IDBTransaction {
-    const transaction = new FakeTransaction(this.indexedDb, mode)
+    const transaction = new FakeTransaction(this.indexedDb, mode, this.indexedDb.takeStalledTransaction())
     return transaction as unknown as IDBTransaction
   }
 }
@@ -216,8 +293,13 @@ class FakeTransaction {
   onerror: ((this: IDBTransaction, ev: Event) => unknown) | null = null
   readonly draft: Map<string, unknown>
 
-  constructor(private readonly indexedDb: FakeIndexedDb, private readonly mode: IDBTransactionMode) {
+  constructor(
+    private readonly indexedDb: FakeIndexedDb,
+    private readonly mode: IDBTransactionMode,
+    stalled: boolean,
+  ) {
     this.draft = new Map([...indexedDb.records].map(([key, value]) => [key, structuredClone(value)]))
+    if (stalled) return
     setTimeout(() => {
       if (mode === 'readwrite' && indexedDb.failNextWrite) {
         indexedDb.failNextWrite = false
@@ -231,6 +313,10 @@ class FakeTransaction {
       }
       this.oncomplete?.call(this as unknown as IDBTransaction, new Event('complete'))
     }, 0)
+  }
+
+  abort(): void {
+    this.onabort?.call(this as unknown as IDBTransaction, new Event('abort'))
   }
 
   objectStore(): IDBObjectStore {
@@ -320,11 +406,14 @@ function completeCurrentAction(state: GameSessionState): GameSessionState {
   const round = state.runManifest.rounds[state.currentRoundIndex]
   let next = state
   if (round.type === 'transcription') {
-    next = [...round.answer].reduce((current, base) => gameReducer(current, { type: 'APPEND_BASE', base }), next)
+    for (const [index, base] of [...round.answer].entries()) {
+      if (next.roundState.input[index] !== base) next = gameReducer(next, { type: 'APPEND_BASE', base })
+    }
     return gameReducer(next, { type: 'CHECK_BASE_ROUND' })
   }
   if (round.type === 'translation') {
-    for (let index = next.roundState.currentCodonIndex; index < round.answers.length; index += 1) {
+    for (let index = 0; index < round.answers.length; index += 1) {
+      if (next.roundState.answers[index] === round.answers[index]) continue
       next = gameReducer(next, { type: 'SELECT_TRANSLATION', index, value: round.answers[index] })
       next = gameReducer(next, { type: 'CHECK_TRANSLATION_CODON' })
     }

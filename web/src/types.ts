@@ -64,6 +64,42 @@ export interface StageContext {
   sequence: ProteinSequence
 }
 
+export interface VariantFocus {
+  sequenceIndex: 1 | 2
+  changedDnaIndex: number
+  changedMrnaIndex: number
+  changedCodonIndex: number
+  changedCodonOffset: 0 | 1 | 2
+  editableDnaIndices: [number]
+  editableCodonIndices: [number]
+}
+
+export interface VariantComparisonSnapshot {
+  dnaBase: string
+  mrnaBase: string
+  codon: string
+  translatedSignal: ProteinSequence['translatedSignals'][number]
+  aminoAcidChain: ProteinSequence['aminoAcidChain']
+  functionRowId: string
+  proteinFunction: string
+  expressedTrait: string
+}
+
+export interface VariantComparisonConsequences {
+  sequenceIndex: 1 | 2
+  effect: MutationEffect
+  focus: VariantFocus
+  original: VariantComparisonSnapshot
+  variant: VariantComparisonSnapshot
+  dnaBaseChanged: boolean
+  mrnaBaseChanged: boolean
+  codonChanged: boolean
+  aminoAcidChanged: boolean
+  aminoAcidChainChanged: boolean
+  proteinFunctionChanged: boolean
+  expressedTraitChanged: boolean
+}
+
 export interface RepairTarget {
   kind: 'base' | 'codon' | 'function-row'
   index: number

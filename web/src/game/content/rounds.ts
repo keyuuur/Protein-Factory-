@@ -145,7 +145,9 @@ export function buildRoundsForFamily(family: ProteinSequenceFamily): GameRound[]
         type: 'transcription',
         title: `Action ${actionOffset + 1}: ${sequenceLabel} Transcription`,
         shortTitle: `${sequenceLabel} mRNA`,
-        prompt: 'Build the mRNA strand by pairing an RNA base with each base in the DNA strand.',
+        prompt: sequenceIndex === 0
+          ? 'Build the mRNA strand by pairing an RNA base with each base in the DNA strand.'
+          : 'Complete the mRNA base beneath the highlighted DNA change.',
         template: sequence.dnaStrand,
         answer: sequence.mrna,
         options: ['A', 'U', 'C', 'G'],

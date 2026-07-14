@@ -72,7 +72,9 @@ export class SubmissionCoordinator {
     for (const item of await readSubmissionQueue(this.repository)) this.publish(item)
     if (typeof window !== 'undefined') window.addEventListener('online', this.handleOnline)
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.handleVisibility)
-    await this.wake('startup')
+    void this.wake('startup').catch((error) => {
+      console.warn(`Startup submission retry failed: ${error instanceof Error ? error.message : 'Unknown error.'}`)
+    })
   }
 
   stop(): void {

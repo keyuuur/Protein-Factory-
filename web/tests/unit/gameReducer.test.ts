@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { createInitialGameState, formatChain, gameReducer } from '../../src/game/simulation/gameReducer'
+import {
+  createInitialGameState,
+  formatChain,
+  gameReducer,
+  normalizeResumedGameState,
+  selectCurrentVariantComparisonConsequences,
+  selectVariantComparisonConsequences,
+  selectVariantFocus,
+} from '../../src/game/simulation/gameReducer'
 import { buildFinalPayload, buildTeacherSummary, selectScore } from '../../src/results/gameResults'
 import type { GameSessionState, RoundResult, TeacherSettings } from '../../src/types'
 
@@ -76,6 +84,147 @@ describe('gameReducer V4 production flow', () => {
     expect(formatChain(state.roundState)).not.toContain('Stop')
     expect(state.roundResults[0].chain).toBeUndefined()
     expect(state.roundResults[1].chain).toBe(round.context.sequence.aminoAcidChain.join('-'))
+  })
+
+  it('prefills variant actions while keeping the focused base and codon as the only editable work', () => {
+    let state = startRun('Mina')
+    for (let index = 0; index < 3; index += 1) state = completeAndContinue(state)
+
+    const transcription = state.runManifest.rounds[state.currentRoundIndex]
+    expect(transcription.type).toBe('transcription')
+    if (transcription.type !== 'transcription') return
+    const transcriptionFocus = selectVariantFocus(transcription)!
+    expect(transcriptionFocus.sequenceIndex).toBe(1)
+    expect(state.roundState.input).toHaveLength(transcription.answer.length)
+    expect(state.roundState.input[transcriptionFocus.changedMrnaIndex]).toBe(' ')
+    expect(removeAt(state.roundState.input, transcriptionFocus.changedMrnaIndex)).toBe(
+      removeAt(transcription.answer, transcriptionFocus.changedMrnaIndex),
+    )
+
+    state = gameReducer(state, { type: 'APPEND_BASE', base: transcription.answer[transcriptionFocus.changedMrnaIndex] })
+    state = gameReducer(state, { type: 'BACKSPACE' })
+    expect(state.roundState.input[transcriptionFocus.changedMrnaIndex]).toBe(' ')
+    expect(removeAt(state.roundState.input, transcriptionFocus.changedMrnaIndex)).toBe(
+      removeAt(transcription.answer, transcriptionFocus.changedMrnaIndex),
+    )
+
+    const wrongBase = transcription.options.find((base) => base !== transcription.answer[transcriptionFocus.changedMrnaIndex])!
+    state = gameReducer(state, { type: 'APPEND_BASE', base: wrongBase })
+    const wrongTranscription = state.roundState.input
+    state = gameReducer(state, { type: 'CHECK_BASE_ROUND' })
+    expect(state.missedSkills.at(-1)?.submitted).toBe(wrongTranscription)
+    expect(state.missedSkills.at(-1)?.submitted).toHaveLength(transcription.answer.length)
+    state = gameReducer(state, { type: 'APPEND_BASE', base: transcription.answer[transcriptionFocus.changedMrnaIndex] })
+    state = gameReducer(state, { type: 'CHECK_BASE_ROUND' })
+    expect(state.roundResults.at(-1)).toMatchObject({
+      attempts: 2,
+      repairs: 1,
+      submitted: transcription.answer,
+    })
+
+    state = gameReducer(state, { type: 'CONTINUE_AFTER_SUCCESS', now: 6_000 })
+    const translation = state.runManifest.rounds[state.currentRoundIndex]
+    expect(translation.type).toBe('translation')
+    if (translation.type !== 'translation') return
+    const translationFocus = selectVariantFocus(translation)!
+    expect(state.roundState.currentCodonIndex).toBe(translationFocus.changedCodonIndex)
+    expect(state.roundState.answers).toEqual(
+      translation.answers.map((answer, index) => index === translationFocus.changedCodonIndex ? '' : answer),
+    )
+
+    const wrongSignal = translation.codonChoices[translationFocus.changedCodonIndex]
+      .find((choice) => choice !== translation.answers[translationFocus.changedCodonIndex])!
+    state = gameReducer(state, { type: 'SELECT_TRANSLATION', index: translationFocus.changedCodonIndex, value: wrongSignal })
+    state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
+    expect(state.missedSkills.at(-1)?.submitted).toBe(
+      translation.answers.map((answer, index) => index === translationFocus.changedCodonIndex ? wrongSignal : answer).join('-'),
+    )
+    state = gameReducer(state, {
+      type: 'SELECT_TRANSLATION',
+      index: translationFocus.changedCodonIndex,
+      value: translation.answers[translationFocus.changedCodonIndex],
+    })
+    state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
+    expect(state.roundResults.at(-1)).toMatchObject({
+      attempts: 2,
+      repairs: 1,
+      submitted: translation.answers.join('-'),
+    })
+  })
+
+  it('selects variant focus and comparison consequences without changing catalog content', () => {
+    let state = startRun('Sol')
+    const manifest = state.runManifest
+    const roundIds = manifest.rounds.map((round) => round.id)
+    const sameChain = selectVariantComparisonConsequences(manifest, 1)!
+    const changedChain = selectVariantComparisonConsequences(manifest, 2)!
+
+    expect(sameChain).toMatchObject({
+      aminoAcidChanged: false,
+      aminoAcidChainChanged: false,
+      codonChanged: true,
+      dnaBaseChanged: true,
+      effect: 'same-chain',
+      expressedTraitChanged: false,
+      mrnaBaseChanged: true,
+      proteinFunctionChanged: false,
+    })
+    expect(changedChain).toMatchObject({
+      aminoAcidChanged: true,
+      aminoAcidChainChanged: true,
+      codonChanged: true,
+      dnaBaseChanged: true,
+      effect: 'amino-acid-change',
+      expressedTraitChanged: true,
+      mrnaBaseChanged: true,
+      proteinFunctionChanged: true,
+    })
+
+    for (let index = 0; index < 3; index += 1) state = completeAndContinue(state)
+    expect(selectCurrentVariantComparisonConsequences(state)).toEqual(sameChain)
+    expect(state.runManifest.rounds.map((round) => round.id)).toEqual(roundIds)
+    expect(state.runManifest.schemaVersion).toBe('protein-factory-v4')
+  })
+
+  it('normalizes unfinished variant drafts while preserving attempt evidence and completed results', () => {
+    let state = startRun('Jo')
+    for (let index = 0; index < 3; index += 1) state = completeAndContinue(state)
+    const round = state.runManifest.rounds[state.currentRoundIndex]
+    if (round.type !== 'transcription') throw new Error('Expected variant transcription round')
+    const focus = selectVariantFocus(round)!
+    const completedResults = state.roundResults
+    const missedSkills = state.missedSkills
+    const supportEvents = [{
+      action: 'transcription' as const,
+      affectsIndependence: true,
+      attempt: 2,
+      choices: [],
+      kind: 'error-location-rule' as const,
+      location: 'legacy position',
+      rule: 'legacy rule',
+    }]
+    state = {
+      ...state,
+      roundState: {
+        ...state.roundState,
+        attempts: 2,
+        hintUsed: true,
+        input: `G${round.answer.slice(1, 5)}`,
+        mistakes: 1,
+        showHint: true,
+        supportEvents,
+      },
+    }
+
+    const normalized = normalizeResumedGameState(state)
+    expect(normalized.roundResults).toBe(completedResults)
+    expect(normalized.missedSkills).toBe(missedSkills)
+    expect(normalized.roundState).toMatchObject({ attempts: 2, hintUsed: true, mistakes: 1, showHint: true })
+    expect(normalized.roundState.supportEvents).toBe(supportEvents)
+    expect(normalized.roundState.input).toHaveLength(round.answer.length)
+    expect(removeAt(normalized.roundState.input, focus.changedMrnaIndex)).toBe(
+      removeAt(round.answer, focus.changedMrnaIndex),
+    )
   })
 
   it('records progressive repairs for transcription and function-row checks', () => {
@@ -380,11 +529,15 @@ function completeCurrentAction(state: GameSessionState): GameSessionState {
   const round = state.runManifest.rounds[state.currentRoundIndex]
   let next = state
   if (round.type === 'transcription') {
-    next = enterBases(next, round.answer)
+    const focus = selectVariantFocus(round)
+    next = focus
+      ? gameReducer(next, { type: 'APPEND_BASE', base: round.answer[focus.changedMrnaIndex] })
+      : enterBases(next, round.answer)
     return gameReducer(next, { type: 'CHECK_BASE_ROUND' })
   }
   if (round.type === 'translation') {
-    for (let index = next.roundState.currentCodonIndex; index < round.answers.length; index += 1) {
+    while (!next.roundResults.some((result) => result.round === next.currentRoundIndex + 1)) {
+      const index = next.roundState.currentCodonIndex
       next = gameReducer(next, { type: 'SELECT_TRANSLATION', index, value: round.answers[index] })
       next = gameReducer(next, { type: 'CHECK_TRANSLATION_CODON' })
     }
@@ -411,4 +564,8 @@ function countDifferences(left: string, right: string): number {
 
 function countArrayDifferences(left: string[], right: string[]): number {
   return left.filter((value, index) => value !== right[index]).length
+}
+
+function removeAt(input: string, index: number): string {
+  return `${input.slice(0, index)}${input.slice(index + 1)}`
 }

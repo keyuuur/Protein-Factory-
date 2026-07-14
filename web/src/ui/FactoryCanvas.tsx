@@ -55,9 +55,14 @@ export function FactoryCanvas({ sceneState, onStationSelect }: FactoryCanvasProp
   return (
     <div
       aria-label={`${sceneState.cargoLabel}. ${sceneState.activeStationLabel}`}
-      aria-live="polite"
       className="factory-canvas-host"
       data-action={sceneState.activeAction}
+      data-active-codon={sceneState.activeCodon ?? undefined}
+      data-changed-dna-index={sceneState.changedDnaIndex ?? undefined}
+      data-completed-products={sceneState.completedProducts.length}
+      data-pending-amino-acid={sceneState.pendingAminoAcid ?? undefined}
+      data-render-revision="0"
+      data-render-settled="false"
       data-sequence-index={sceneState.sequenceIndex}
       data-testid="factory-canvas"
       ref={containerRef}
@@ -65,12 +70,7 @@ export function FactoryCanvas({ sceneState, onStationSelect }: FactoryCanvasProp
       {hasRuntimeError && (
         <div className="factory-fallback" role="status">
           <strong>Cell lab view paused</strong>
-          <span>Your work is safe. Use the active lab button to continue.</span>
-          <div>
-            <button onClick={() => onStationSelect(sceneState.activeStationId)} type="button">
-              Continue {sceneState.activeStationLabel}
-            </button>
-          </div>
+          <span>Your work is safe. Continue with the lab controls.</span>
         </div>
       )}
     </div>
