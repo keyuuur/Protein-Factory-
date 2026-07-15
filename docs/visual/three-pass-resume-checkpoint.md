@@ -1,21 +1,24 @@
 # Protein Factory Three-Pass Resume Checkpoint
 
-## Clean stopping point
+## Release-candidate stopping point
 
-All three visual implementation passes are complete on `codex/protein-factory-revamp`. Pass 3 is ready to be committed and pushed with this checkpoint. Production Vercel remains unchanged.
+All three visual implementation passes and the automated release audit are complete on `codex/protein-factory-revamp`. Production Vercel remains unchanged. The next external gate is a physical Safari iPad run against the non-production preview.
 
 ## Completed work
 
 - Pass 1 (`cd7d4c2`) united the laboratory, student controls, and shared bench.
 - Pass 2 (`e8d4653`) made the Three.js laboratory visibly react to transcription, translation, repair, Stop, and function selections.
 - Pass 3 polished classroom spacing, start/end/recovery states, touch sizing, feedback stability, codon-wheel accessibility, keyboard navigation, reduced motion, and narrow-screen behavior.
+- Audit fixes (`3120a07`) aligned the release suites with focused variants and current diagnostic copy, added keyboard coverage, and stabilized reaction timing assertions.
+- Renderer and short-screen fixes (`9da294c`) exposed iPad-landscape controls and closed a delayed-frame settling edge case.
 - Phone results now open at the rating and independence summary instead of inheriting gameplay scroll.
 - Recovery Start Over now requires confirmation and manages keyboard focus.
 - Function rows retain a valid keyboard tab stop if progressive narrowing removes the stored selection.
 - Mobile codon-wheel locking restores the nearest valid page position after rotation without horizontal overflow.
 - Landscape Translation resets its console to the top when the wheel opens.
 - The storage-denied full-run test now follows focused variant transcription and translation instead of repeating all Protein 1 inputs.
-- Fresh isolated phone and iPad-landscape Pass 3 screenshots are stored under `output/playwright/`.
+- Ninety fresh Pass 3 screenshots are stored under `output/playwright/`: 15 states for each of six browser profiles.
+- Five deterministic comparison boards and the final assessment are tracked under `docs/visual/reviews/three-pass-final/`.
 
 ## Verified at this checkpoint
 
@@ -28,6 +31,10 @@ All three visual implementation passes are complete on `codex/protein-factory-re
 - Classroom control stability, reduced-motion, 320x568, persistence confirmation, and mobile codon-wheel suites have targeted coverage.
 - Fresh phone evidence shows the correct Protein Factory app and the final heading in the initial result viewport.
 - Fresh iPad-landscape evidence shows the Translation task and wheel beginning at the top of the console.
+- Two consecutive complete Playwright runs passed from `9da294c`: `34 passed / 122 intentionally skipped` in 12.5 minutes, then the same result in 10.8 minutes.
+- The 90 final PNGs contain no transparent or blank frames. Sampled near-black pixels peak at 0.43% in codon-wheel text and outlines.
+- Six read-only release reviewers returned no blocker for a protected preview. They did not clear production promotion.
+- Vercel CLI authentication works for the linked `protein-factory` project. The project reports no configured environment variables, keeping the preview local-only.
 
 ## Important test isolation note
 
@@ -35,13 +42,19 @@ Do not reuse an unknown server already listening on port 4173. A stale sibling-g
 
 ## Resume here
 
-1. Confirm the worktree contains no unexpected changes; leave `ui_goal_description.md` and `docs/handoffs/` untouched unless the user explicitly brings them into scope.
-2. Run the complete Playwright suite twice consecutively with one isolated server and no reused port: set `CI=1` and use `--workers=1` if reliability is more important than speed.
-3. Recapture the final six-profile Pass 3 matrix after the latest accessibility fixes: desktop Chromium, iPad Chromium portrait, iPad WebKit portrait, iPad landscape, phone Chromium, and iPhone WebKit.
-4. Inspect the saved PNG pixels and key screenshots. Do not treat the Codex image-preview black-block artifact as a real canvas failure unless the PNG pixel checks also fail.
-5. Package Pass 1, Pass 2, and Pass 3 comparisons against `docs/visual/reference/shared-bench-v5/` and write the final visual assessment.
-6. Complete the stack decision. Current evidence favors React/DOM controls with a focused, lighter Three.js laboratory; Phaser is not justified unless a repeatable device failure or direct-manipulation requirement emerges.
-7. Perform the external physical Safari iPad check before any production promotion.
+1. Open the non-production preview URL recorded below on a physical Safari iPad.
+2. Complete one full three-protein run.
+3. Rotate while Translation has the codon wheel open.
+4. Background and restore Safari during an unfinished action.
+5. Confirm there are no black frames, clipped controls, lost selections, or unexpected page jumps.
+6. Confirm the final rating begins in the visible viewport.
+7. Record the iPad model, iPadOS version, orientation findings, and any school-network behavior before considering production promotion.
+
+## Preview record
+
+- Preview URL: pending evidence commit and deployment
+- Deployed commit: pending
+- Submission mode: local-only; no Vercel environment variables are configured
 
 ## Release boundaries
 
@@ -50,3 +63,7 @@ Do not reuse an unknown server already listening on port 4173. A stale sibling-g
 - Do not change production Vercel during the remaining audit.
 - Do not add gameplay, biology content, dependencies, or backend changes during the release audit.
 - Teacher submission remains dependent on separately supplied production configuration.
+
+## Stack decision
+
+Continue with React/DOM controls plus a focused, lighter Three.js laboratory. Do not migrate to Phaser unless physical-device evidence reveals a repeatable renderer failure or future gameplay requires direct spatial manipulation in at least two actions.
