@@ -52,9 +52,13 @@ Do not reuse an unknown server already listening on port 4173. A stale sibling-g
 
 ## Preview record
 
-- Preview URL: pending evidence commit and deployment
-- Deployed commit: pending
+- Preview URL: `https://protein-factory-ls31xosb8-keyur159263-5904s-projects.vercel.app`
+- Deployment ID: `dpl_6uHk39RMKo68axFEWhCYK2CUneVS`
+- Deployed commit: `4d55c79`
 - Submission mode: local-only; no Vercel environment variables are configured
+- Access: public preview; Vercel SSO preview protection is disabled, while Git-fork protection remains enabled
+- Remote smoke: passed start, tutorial, Protein 1 workbench, mRNA selection, settled renderer revision, canvas presence, and application asset requests
+- Known non-blocker: missing `favicon.ico` returns 404 and is the only browser-console error
 
 ## Release boundaries
 

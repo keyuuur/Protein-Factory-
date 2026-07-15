@@ -6,6 +6,7 @@
 - Tested commit: `9da294c4794e074551bacb1194e474a93e7989e8`
 - Production status: unchanged
 - Intended next deployment: Vercel preview for physical Safari iPad testing
+- Public preview: `https://protein-factory-ls31xosb8-keyur159263-5904s-projects.vercel.app`
 
 This pack compares the approved V5 composition ideals with the three implemented UI passes. The boards use real browser screenshots. No image generation, retouching, or replacement scientific content was used.
 
@@ -84,3 +85,5 @@ Reconsider a Phaser prototype only if physical iPad testing reveals a repeatable
 ## Release Boundary
 
 This is a preview candidate, not a production promotion. The linked Vercel project reported no environment variables during this audit, so the preview remains honestly local-only and cannot forward results to Apps Script. Teacher submission must remain disabled or local-only unless the production Apps Script URL and matching write token are configured separately. Production promotion requires a successful physical Safari iPad run and explicit approval.
+
+The public preview was deployed from evidence commit `4d55c79`. A remote browser smoke test confirmed the Protein Factory start screen, tutorial, Protein 1 workbench, a real mRNA selection, one settled Three.js canvas, and `200` responses for the HTML, JavaScript, CSS, and renderer assets. The only console entry was a non-blocking `favicon.ico` 404.
