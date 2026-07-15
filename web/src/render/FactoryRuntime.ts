@@ -736,7 +736,10 @@ export class FactoryRuntime {
 
   private startLoop(): void {
     if (this.disposed || document.hidden || !this.contextAvailable || this.animationFrame) return
-    if (performance.now() >= this.motionEndsAt) return
+    if (performance.now() >= this.motionEndsAt) {
+      this.finishMotion()
+      return
+    }
     this.animationFrame = requestAnimationFrame(this.loop)
   }
 
