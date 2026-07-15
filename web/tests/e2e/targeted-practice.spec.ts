@@ -38,7 +38,12 @@ test('submits a linked targeted-practice attempt with new evidence and a repair 
     await dock.getByRole('button', { exact: true, name: base }).click()
   }
   await dock.getByRole('button', { name: 'Check mRNA' }).click()
-  await expect(dock.getByText(/Repair highlighted slot/)).toBeVisible()
+  const repairFeedback = dock.getByRole('alert')
+  await expect(repairFeedback.getByText('Inspect the highlighted mismatch.', { exact: true })).toBeVisible()
+  await expect(repairFeedback.getByText(
+    `Pair a complementary RNA nucleotide with the DNA strand and use U, not T, at position 1: ${firstRound.template[0]} pairs with ${firstRound.answer[0]}.`,
+    { exact: true },
+  )).toBeVisible()
   await dock.getByRole('button', { exact: true, name: firstRound.answer[0] }).click()
   await dock.getByRole('button', { name: 'Check mRNA' }).click()
   await continueAfterSuccess(page)

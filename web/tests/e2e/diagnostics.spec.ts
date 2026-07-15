@@ -22,7 +22,12 @@ test('shows visual repair guidance for all three action types', async ({ page },
     await dock.getByRole('button', { exact: true, name: base }).click()
   }
   await dock.getByRole('button', { name: 'Check mRNA' }).click()
-  await expect(dock.getByText(/Repair highlighted slot/)).toBeVisible()
+  const transcriptionRepair = dock.getByRole('alert')
+  await expect(transcriptionRepair.getByText('Inspect the highlighted mismatch.', { exact: true })).toBeVisible()
+  await expect(transcriptionRepair.getByText(
+    `Pair a complementary RNA nucleotide with the DNA strand and use U, not T, at position 1: ${transcription.template[0]} pairs with ${transcription.answer[0]}.`,
+    { exact: true },
+  )).toBeVisible()
   await captureViewportPng(page, testInfo, 'wrong-transcription-repair')
   await dock.getByRole('button', { exact: true, name: transcription.answer[0] }).click()
   await dock.getByRole('button', { name: 'Check mRNA' }).click()
@@ -35,7 +40,12 @@ test('shows visual repair guidance for all three action types', async ({ page },
   await dock.getByRole('group', { name: `Signals for ${translation.codons[0]}` })
     .getByRole('button', { exact: true, name: wrongSignal }).click()
   await dock.getByRole('button', { name: 'Check codon' }).click()
-  await expect(dock.getByText(/Recheck codon 1 with the codon wheel/)).toBeVisible()
+  const translationRepair = dock.getByRole('alert')
+  await expect(translationRepair.getByText('Inspect the highlighted mismatch.', { exact: true })).toBeVisible()
+  await expect(translationRepair.getByText(
+    `Read one complete mRNA codon at codon 1: ${translation.codons[0]} codes for ${translation.answers[0]}.`,
+    { exact: true },
+  )).toBeVisible()
   await captureViewportPng(page, testInfo, 'wrong-translation-repair')
   for (let index = 0; index < translation.answers.length; index += 1) {
     const answer = translation.answers[index]
@@ -51,7 +61,12 @@ test('shows visual repair guidance for all three action types', async ({ page },
   const wrongRow = functionRound.referenceRows.find((row) => row.id !== functionRound.correctRowId)!
   await dock.getByRole('radio').filter({ hasText: wrongRow.aminoAcidSequence.join(' - ') }).click()
   await dock.getByRole('button', { name: 'Check Match' }).click()
-  await expect(dock.getByText(/Compare all four amino acids/)).toBeVisible()
+  const functionRepair = dock.getByRole('alert')
+  await expect(functionRepair.getByText('Inspect the highlighted mismatch.', { exact: true })).toBeVisible()
+  await expect(functionRepair.getByText(
+    'Match all four amino acids, then use the function and trait from that same row.',
+    { exact: true },
+  )).toBeVisible()
   await captureViewportPng(page, testInfo, 'wrong-function-repair')
   issues.assertClean()
 })

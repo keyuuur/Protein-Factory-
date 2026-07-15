@@ -70,17 +70,25 @@ async function completeStorageRun(page: import('@playwright/test').Page, name: s
   for (let action = 0; action < 9; action += 1) {
     const dock = page.getByTestId('task-dock')
     if (await page.getByRole('heading', { name: 'Build the mRNA' }).isVisible()) {
-      const dna = (await dock.locator('.dna-row b').allTextContents()).join('')
+      const dna = await dock.locator('.dna-row b').allTextContents()
+      const slots = dock.locator('[aria-label^="mRNA slot"]')
       const pair: Record<string, string> = { A: 'U', T: 'A', C: 'G', G: 'C' }
-      for (const base of dna) await dock.getByRole('button', { exact: true, name: pair[base] }).click()
+      for (let index = 0; index < dna.length; index += 1) {
+        const label = await slots.nth(index).getAttribute('aria-label')
+        if (!label?.endsWith(', empty')) continue
+        await dock.getByRole('button', { exact: true, name: pair[dna[index]] }).click()
+      }
       await dock.getByRole('button', { name: 'Check mRNA' }).click()
     } else if (await page.getByRole('heading', { name: 'Build the amino acid chain' }).isVisible()) {
       for (let codonIndex = 0; codonIndex < 5; codonIndex += 1) {
-        const codon = await dock.locator('.codon-selector button strong').nth(codonIndex).innerText()
+        const signalGroup = dock.locator('[role="group"][aria-label^="Signals for"]:visible')
+        const label = await signalGroup.getAttribute('aria-label')
+        const codon = label?.replace('Signals for ', '')
+        if (!codon || !(codon in CODON_TABLE)) throw new Error(`Missing active codon signal: ${label}`)
         const answer = CODON_TABLE[codon]
-        await dock.getByRole('group', { name: `Signals for ${codon}` })
-          .getByRole('button', { exact: true, name: answer }).click()
+        await signalGroup.getByRole('button', { exact: true, name: answer }).click()
         await dock.getByRole('button', { name: 'Check codon' }).click()
+        if (await page.getByTestId('shipment-overlay').isVisible()) break
       }
     } else {
       const chain = await dock.locator('.chain-under-test strong').innerText()

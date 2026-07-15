@@ -97,8 +97,10 @@ test.describe('V4 desktop gameplay', () => {
     await expect(selected).toHaveAttribute('aria-checked', 'true')
     await page.getByTestId('task-dock').getByRole('button', { name: 'Check Match' }).click()
     await expect(page.getByTestId('shipment-overlay').getByText('Protein product complete.')).toBeVisible()
-    await expect(page.getByLabel('Completed protein comparison tray').getByText('Protein 1')).toBeVisible()
     expect((await currentState(page)).completedProducts).toHaveLength(1)
+    await page.getByTestId('shipment-overlay').getByRole('button', { name: 'Start Protein 2' }).click()
+    const originalProduct = page.getByLabel('Completed protein comparison tray').getByText('P1 Original', { exact: true })
+    await expect(originalProduct).toHaveAttribute('aria-label', 'Protein 1: Original')
     issues.assertClean()
   })
 

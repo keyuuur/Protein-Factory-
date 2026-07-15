@@ -69,6 +69,29 @@ test.describe('classroom interaction polish', () => {
     await expect(canvas).toHaveAttribute('data-render-frame-revision', await canvas.getAttribute('data-render-revision') ?? '')
   })
 
+  test('function choices support standard radiogroup keyboard navigation', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop-chromium', 'Desktop Chromium owns keyboard interaction checks.')
+    await page.goto('/')
+    await beginRun(page, { name: 'Keyboard Student' })
+    await completeCurrentAction(page)
+    await continueAfterSuccess(page)
+    await completeCurrentAction(page)
+    await continueAfterSuccess(page)
+
+    const dock = page.getByTestId('task-dock')
+    const radios = dock.getByRole('radio')
+    await expect(radios).toHaveCount(4)
+    await radios.first().focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(radios.nth(1)).toBeFocused()
+    await expect(radios.nth(1)).toHaveAttribute('aria-checked', 'true')
+    await page.keyboard.press('End')
+    await expect(radios.last()).toBeFocused()
+    await page.keyboard.press('Home')
+    await expect(radios.first()).toBeFocused()
+    await expect(dock.getByRole('button', { name: 'Check Match' })).toBeEnabled()
+  })
+
   test('320 by 568 keeps gameplay controls on-screen and touchable without phantom width', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'phone-portrait', 'The phone project owns the narrow classroom viewport.')
     await page.setViewportSize({ width: 320, height: 568 })

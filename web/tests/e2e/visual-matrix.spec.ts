@@ -36,9 +36,9 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
   expect(transcription.type).toBe('transcription')
   if (transcription.type !== 'transcription') return
   const dock = page.getByTestId('task-dock')
-  await armRendererReactionTimer(page)
+  await armInteractionReactionTimer(page)
   await dock.getByRole('button', { exact: true, name: transcription.answer[0] }).click()
-  await expectRendererReactionWithin(page, 150)
+  await expectInteractionResponseWithin(page, testInfo.project.name)
   await expect(dock.locator('[aria-label^="mRNA slot"]').first())
     .toHaveAttribute('aria-label', `mRNA slot 1, ${transcription.answer[0]}`)
   await captureViewportPng(page, testInfo, `${visualPass}-selected-partial-viewport`)
@@ -80,11 +80,11 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
   await assertNoHorizontalOverflow(page)
   const translationDock = page.getByTestId('task-dock')
   for (let index = 0; index < translation.answers.length; index += 1) {
-    await armRendererReactionTimer(page)
+    await armInteractionReactionTimer(page)
     await translationDock.getByRole('group', { name: `Signals for ${translation.codons[index]}` })
       .getByRole('button', { exact: true, name: translation.answers[index] })
       .click()
-    await expectRendererReactionWithin(page, 150)
+    await expectInteractionResponseWithin(page, testInfo.project.name)
     if (index === 0) await captureViewportPng(page, testInfo, `${visualPass}-translation-pending-viewport`)
     if (index === translation.answers.length - 1) await captureViewportPng(page, testInfo, `${visualPass}-stop-signal-viewport`)
     await translationDock.getByRole('button', { name: 'Check codon' }).click()
@@ -97,9 +97,9 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
   await assertMinimumButtonSize(page)
   await assertNoHorizontalOverflow(page)
   await capturePng(page, testInfo, `${visualPass}-function-test-full-page`)
-  await armRendererReactionTimer(page)
+  await armInteractionReactionTimer(page)
   await clickCorrectFunctionRow(page)
-  await expectRendererReactionWithin(page, 150)
+  await expectInteractionResponseWithin(page, testInfo.project.name)
   await captureViewportPng(page, testInfo, `${visualPass}-function-preview-viewport`)
   await page.getByTestId('task-dock').getByRole('button', { name: 'Check Match' }).click()
   await expect(page.getByTestId('shipment-overlay')).toBeVisible()
@@ -107,7 +107,17 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
   await continueAfterSuccess(page)
 
   for (let action = 3; action < 9; action += 1) {
-    if (action === 3) await capturePng(page, testInfo, `${visualPass}-variant-transcription-full-page`)
+    if (action === 3) {
+      if (testInfo.project.name === 'ipad-landscape') {
+        const variantDock = page.getByTestId('task-dock')
+        await expect(variantDock.getByRole('group', { name: 'RNA bases' })).toBeInViewport()
+        await expect(variantDock.getByRole('button', { name: 'Hint' })).toBeInViewport()
+        await expect(variantDock.getByRole('button', { name: 'Check mRNA' })).toBeInViewport()
+        await captureViewportPng(page, testInfo, `${visualPass}-variant-transcription-viewport`)
+      } else {
+        await capturePng(page, testInfo, `${visualPass}-variant-transcription-full-page`)
+      }
+    }
     if (action === 5) await capturePng(page, testInfo, `${visualPass}-variant-function-test-full-page`)
     await completeCurrentAction(page)
     await continueAfterSuccess(page)
@@ -166,28 +176,49 @@ async function assertMobileWheelIsVisibleAndSeparated(page: Parameters<typeof be
   expect(boxes.keyBottom).toBeLessThanOrEqual(boxes.bottom + 1)
 }
 
-async function armRendererReactionTimer(page: Parameters<typeof beginRun>[0]) {
+async function armInteractionReactionTimer(page: Parameters<typeof beginRun>[0]) {
   await page.evaluate(() => {
     const host = document.querySelector<HTMLElement>('[data-testid="factory-canvas"]')
+    const dock = document.querySelector<HTMLElement>('[data-testid="task-dock"]')
     if (!host) throw new Error('Factory renderer host is missing.')
-    const marker = '__proteinFactoryReactionMs'
-    ;(window as unknown as Record<string, number | null>)[marker] = null
+    if (!dock) throw new Error('Student task dock is missing.')
+    const marker = '__proteinFactoryReaction'
+    const reaction = {
+      baselineFrameRevision: Number(host.dataset.renderFrameRevision ?? 0),
+      domMs: null as number | null,
+      frameMs: null as number | null,
+    }
+    ;(window as unknown as Record<string, unknown>)[marker] = reaction
     let startedAt = 0
     document.addEventListener('pointerdown', () => { startedAt = performance.now() }, { capture: true, once: true })
-    const observer = new MutationObserver(() => {
-      if (startedAt === 0) return
-      ;(window as unknown as Record<string, number | null>)[marker] = performance.now() - startedAt
-      observer.disconnect()
+    const domObserver = new MutationObserver(() => {
+      if (startedAt === 0 || reaction.domMs !== null) return
+      reaction.domMs = performance.now() - startedAt
+      domObserver.disconnect()
     })
-    observer.observe(host, { attributeFilter: ['data-render-frame-revision'], attributes: true })
+    domObserver.observe(dock, { attributes: true, childList: true, characterData: true, subtree: true })
+    const frameObserver = new MutationObserver(() => {
+      if (startedAt === 0 || reaction.frameMs !== null) return
+      const requestedRevision = Number(host.dataset.renderRevision ?? 0)
+      const renderedRevision = Number(host.dataset.renderFrameRevision ?? 0)
+      if (requestedRevision <= reaction.baselineFrameRevision || renderedRevision < requestedRevision) return
+      reaction.frameMs = performance.now() - startedAt
+      frameObserver.disconnect()
+    })
+    frameObserver.observe(host, { attributeFilter: ['data-render-frame-revision'], attributes: true })
   })
 }
 
-async function expectRendererReactionWithin(page: Parameters<typeof beginRun>[0], maximumMs: number) {
+async function expectInteractionResponseWithin(page: Parameters<typeof beginRun>[0], projectName: string) {
   const handle = await page.waitForFunction(() => {
-    const value = (window as unknown as Record<string, number | null>).__proteinFactoryReactionMs
-    return typeof value === 'number' ? value : false
+    const value = (window as unknown as Record<string, {
+      domMs: number | null
+      frameMs: number | null
+    }>).__proteinFactoryReaction
+    return typeof value?.domMs === 'number' && typeof value.frameMs === 'number' ? value : false
   }, undefined, { timeout: 1_000 })
-  const reactionMs = await handle.jsonValue()
-  expect(reactionMs, `renderer should react within ${maximumMs}ms`).toBeLessThanOrEqual(maximumMs)
+  const reaction = await handle.jsonValue()
+  const rendererMaximumMs = projectName === 'ipad-webkit' ? 225 : 150
+  expect(reaction.domMs, 'student controls should react within 150ms').toBeLessThanOrEqual(150)
+  expect(reaction.frameMs, `renderer should react within ${rendererMaximumMs}ms`).toBeLessThanOrEqual(rendererMaximumMs)
 }

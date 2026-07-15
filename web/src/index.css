@@ -1571,6 +1571,9 @@ input[type='checkbox'] { width: 23px; min-height: 23px; accent-color: var(--teal
   .shared-workbench {
     grid-template-rows: minmax(230px, 35vh) minmax(0, 1fr);
   }
+  .transcription-workbench .action-shelf {
+    margin-top: 0;
+  }
   .task-surface {
     padding-top: 5px;
   }
