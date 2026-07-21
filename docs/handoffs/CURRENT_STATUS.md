@@ -2,98 +2,88 @@
 
 ## Last Updated and Scope
 
-- Last updated: 2026-07-15 CT.
-- Scope: completed three-pass visual revamp, release audit, curated evidence, protected preview deployment, and restart-ready handoff.
-- Current status: automated release candidate is complete and ready for a physical Safari iPad gate. Production promotion and teacher submission are not cleared.
+- Last updated: 2026-07-21 CT.
+- Scope: visual-hierarchy implementation, local verification, Git handoff refresh, and a new non-production preview attempt.
+- Current status: implementation is verified and prepared for publication on the expected GitHub branch. Preview deployment is the next release step. Production remains unchanged and approval-gated.
 
 ## Git and Working-Tree Posture
 
-- Project root: `C:\Users\Keyur\Desktop\Claude Code YEET\Teacher Coding Projects\Biology Games\Pirate Protein Factory LOCAL`.
+- Project root: `/workspace/scratch/7cee5e57bcec/Protein-Factory-`.
+- GitHub repository: `https://github.com/keyuuur/Protein-Factory-.git`.
 - Current branch: `codex/protein-factory-revamp`.
-- Upstream: `origin/codex/protein-factory-revamp` on GitHub.
-- Current HEAD: `59964fbd814be00a530219dd0f3573a8802ea7d3` (`Record Protein Factory preview handoff`).
-- Ahead/behind: `0/0` after a fresh fetch.
-- The current tracked branch is synchronized with GitHub.
-- `docs/handoffs/` and `ui_goal_description.md` are untracked. The handoff files are being refreshed by the explicit `$codex-handoff` workflow; `ui_goal_description.md` remains unrelated and untouched.
-- The second local branch `codex/pirate-protein-factory` remains one commit ahead of its own upstream. It was not switched, merged, rebased, or changed.
+- Upstream: `origin/codex/protein-factory-revamp`.
+- Verified starting commit: `c23539ce3a93b5a86eae49ab76b795725a0f8868`.
+- Canonical GitHub implementation commit: `f4a7c2cccf2b63ac91a246da2d78828f0d153dc2` (`Clarify Protein Factory visual relationships`).
+- The implementation commit contains the verified starting commit in its ancestry.
+- The GitHub publication uses the exact locally verified implementation tree and a separate handoff refresh commit.
 
-## Completed Implementation and Release Audit
+## Current Architecture and Preserved Contract
 
-- Pass 1 (`cd7d4c2`) united the shared workbench and student controls.
-- Pass 2 (`e8d4653`) made the Three.js laboratory react to transcription, translation, repair, Stop, function selection, and product delivery.
-- Pass 3 (`6336508`) polished classroom spacing, touch sizing, feedback stability, recovery, codon-wheel behavior, reduced motion, and narrow layouts.
-- Audit fixes (`3120a07`) aligned browser tests with focused Protein 2/3 challenges and current diagnostic copy.
-- Renderer and short-screen fixes (`9da294c`) restored iPad-landscape controls and closed a delayed-frame settling edge case.
-- Visual evidence and assessment were committed in `4d55c79`.
-- The public preview record was committed in `59964fb`.
+- The active app remains the Vite + React + TypeScript application under `web/`.
+- React and the DOM continue to own student controls, keyboard behavior, focus, screen-reader output, feedback, and submission state.
+- `FactoryCanvas` sends a serializable snapshot from `sceneState.ts` to the focused, noninteractive Three.js `FactoryRuntime` visual-feedback layer.
+- The V4 nine-action, three-product flow is unchanged.
+- Scoring, sequences, codon mappings, persistence, result schemas, submission behavior, Apps Script integration, and legacy/V3 compatibility are unchanged.
+- The codon wheel remains an always-available reference and does not count as a hint.
 
-## Verified Evidence
+## Implemented Visual Hierarchy
 
-Checks already completed against the release-candidate application code:
+- The laboratory now states the current relationship directly for each action:
+  - DNA base to mRNA base during transcription.
+  - Codon to signal to growing amino-acid chain during translation.
+  - Completed chain to pigment outcome to modeled trait during the function action.
+- Live captions and relationship strips are derived from the same scene snapshot as the Three.js layer, including repair targets and provisional selections.
+- The function visual now uses a pigment-output level, directional cue, and trait swatch instead of a decorative assay vessel.
+- Decorative laboratory rings, trays, and progress elements have less visual weight.
+- The codon-wheel reading key now shows an explicit first-base to second-base to third-base to amino-acid/Stop direction.
+- The later V5 cascade is authoritative: the laboratory is approximately 21vh on desktop/landscape, 205px on iPad portrait, 154px on phone portrait, and 22vh for short desktop landscape. The earlier 29vh rule remains overridden.
 
-- `npm run test`: passed, 67 tests.
+## Local Verification
+
+- `npm run test`: passed, 67 tests in 9 files.
 - `npm run lint`: passed.
 - `npm run build`: passed.
-- Renderer JavaScript: 139.25 KB gzip, below the 150 KB gate.
-- Total frontend JavaScript: 236.44 KB gzip, below the 260 KB gate.
+- Renderer JavaScript: 139.45 KB gzip, below the 150 KB gate.
+- Total frontend JavaScript: 237.19 KB gzip, below the 260 KB gate.
 - The existing raw Three.js chunk-size warning remains non-blocking.
-- Full Playwright run 1: 34 passed, 122 intentionally skipped, 12.5 minutes.
-- Full Playwright run 2: 34 passed, 122 intentionally skipped, 10.8 minutes.
-- Ninety fresh Pass 3 PNGs were captured: 15 states for each of six profiles.
-- Profiles: desktop Chromium, iPad Chromium portrait, iPad WebKit portrait, iPad WebKit landscape, phone Chromium, and iPhone WebKit.
-- Pixel sampling found no transparent or blank frames. Near-black pixels peaked at 0.43 percent in codon-wheel text and outlines.
-- Six read-only release reviewers returned no blocker for a protected preview. They did not clear production promotion.
+- `npx playwright test --list`: passed; 156 tests in 10 files were discovered across desktop Chromium, iPad Chromium portrait, iPad WebKit portrait, iPad WebKit landscape, phone Chromium, and iPhone WebKit.
+- The visual-flow test still intercepts `/api/attempt`; no real student submission is made by that automation.
+- The Playwright browser run and fresh screenshots are not complete in this environment. No compatible browser binary is installed, and the sanctioned Playwright Chromium/WebKit download failed at the environment's browser CDN/certificate boundary. This is an environment limitation, not a passing browser result.
 
-Curated evidence:
+## Visual Evidence
 
-- `docs/visual/reviews/three-pass-final/README.md`
-- `docs/visual/reviews/three-pass-final/01-transcription-three-pass.png`
-- `docs/visual/reviews/three-pass-final/02-translation-three-pass.png`
-- `docs/visual/reviews/three-pass-final/03-function-test-three-pass.png`
-- `docs/visual/reviews/three-pass-final/04-responsive-pass-3.png`
-- `docs/visual/reviews/three-pass-final/05-classroom-states-pass-3.png`
+- Existing curated screenshots remain available under `docs/visual/reviews/three-pass-final/` for historical comparison.
+- Those images predate `f4a7c2c` and are not evidence for the new implementation.
+- Fresh browser screenshots must be captured from the new preview or from an environment with a working Chromium/WebKit installation.
 
 ## Preview Deployment
 
-- Public preview: `https://protein-factory-ls31xosb8-keyur159263-5904s-projects.vercel.app`
-- Deployment ID: `dpl_6uHk39RMKo68axFEWhCYK2CUneVS`
-- Deployed commit: `4d55c79`
-- Vercel status: READY, target `preview`.
-- Vercel SSO preview protection is disabled so the iPad link is public. Git-fork protection remains enabled.
-- The linked Vercel project reports no environment variables. Preview results therefore remain local-only and cannot be forwarded to Apps Script.
-- Remote browser smoke passed the start screen, tutorial, Protein 1 workbench, one real mRNA selection, settled renderer revision, one canvas, and application asset requests.
-- The only remote console entry was a non-blocking missing `favicon.ico` 404.
-- Production Vercel was not promoted or changed.
+- Existing preview: `https://protein-factory-ls31xosb8-keyur159263-5904s-projects.vercel.app`.
+- The existing preview is an older release candidate and is not implementation evidence for `f4a7c2c`.
+- A new preview has not yet been created at the time of this handoff refresh.
+- At bootstrap, no local Vercel CLI or `.vercel/project.json` was present, and the available Vercel connector could not authenticate to the known project. Git integration and deployment status will be checked after the commits are pushed.
+- Any new deployment must target preview only, use `web/` as the project root, retain local-only results, and add no submission environment variables.
+- Production has not been promoted, aliased, rolled back, or otherwise changed.
 
-## Current Risks and Unverified Gates
+## Current Risks and Remaining Gates
 
-- No physical Safari iPad run has been completed against this preview.
-- Rotation with the codon wheel open, Safari background/foreground recovery, sustained WebGL rendering, the onscreen keyboard, and school-network behavior remain external device checks.
-- Teacher submission is not configured. Live Apps Script V4 writes, deduplication, retry, and Sheet-row behavior were not exercised by this preview.
-- Function Test can be solved by literal chain matching. It checks careful comparison more than independent function reasoning.
-- The 3D laboratory is responsive feedback, not decision-bearing spatial gameplay.
-- Translation remains the densest action, and the phone independence summary is visually awkward.
-- On iPad portrait, beginning the next protein may require one deliberate scroll after the transition summary.
-- The missing favicon is cosmetic and should be handled in a later polish pass unless it becomes a release requirement.
+- Full browser execution and fresh screenshot capture remain blocked in the current workspace until a browser or remote capture path is available.
+- A new preview still needs to be created and smoke-checked after GitHub push.
+- Automated WebKit does not replace the physical Safari iPad gate.
+- Rotation with the codon wheel open, Safari background/foreground recovery, sustained WebGL rendering, the onscreen keyboard, and school-network behavior remain physical-device checks.
+- Teacher submission is not configured for preview and must remain local-only.
 
 ## Exact Next Actions
 
-1. Open the public preview on the intended physical Safari iPad.
-2. Complete one full three-protein run.
-3. Rotate while Translation has the codon wheel open.
-4. Background and restore Safari during an unfinished action.
-5. Confirm there are no black frames, clipped controls, lost selections, or unexpected page jumps.
-6. Confirm the final rating begins in the visible viewport.
-7. Record the iPad model, iPadOS version, orientation findings, and school-network behavior.
-8. Decide whether any physical-device finding requires a narrow fix and repeated release gate.
-9. Promote production only after the physical gate passes and Keyur gives explicit approval.
+1. Check the published commit for a Vercel Git-integration preview.
+2. If Git integration does not create one, try the authenticated preview-only deployment tooling without production flags or environment changes.
+3. Smoke-check the resulting preview and capture fresh screenshots if an approved browser path is available.
+4. Run the physical Safari iPad gate separately before any production decision.
 
 ## Explicit Boundaries
 
-- First turn after this handoff is read-only context gathering only.
-- Do not change production Vercel, Apps Script, environment variables, tokens, or result destinations without explicit approval.
-- Do not treat the public preview as production or as proof of teacher submission.
-- Do not add advanced strand-direction terminology to the ninth-grade student UI.
-- Do not migrate to Phaser or full Three.js without new evidence meeting the reconsideration conditions in `PROJECT_CONTEXT.md`.
-- Do not touch or include `ui_goal_description.md` unless Keyur explicitly brings it into scope.
+- Do not change production Vercel, Apps Script, environment variables, tokens, result destinations, or student data.
+- Do not treat a preview as production or as proof of teacher submission.
+- Do not add strand-direction or template/coding-strand terminology to the ninth-grade student UI.
+- Do not migrate controls into WebGL, reopen Phaser, or expand Three.js beyond focused noninteractive feedback.
 - Do not reset, force-push, merge, rebase, discard, or hide unrelated work.
