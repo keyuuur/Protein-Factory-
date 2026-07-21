@@ -287,7 +287,7 @@ export function CodonWheel({ activeCodonIndex, codons, isOpen, onClose, returnFo
       </div>
 
       <div className="wheel-ring-key" aria-hidden="true">
-        <span>1st base</span><span>2nd base</span><span>3rd base</span><span>Amino acid / Stop</span>
+        <span>1st base</span><i>→</i><span>2nd base</span><i>→</i><span>3rd base</span><i>→</i><span>Amino acid / Stop</span>
       </div>
 
       <table className="sr-only">

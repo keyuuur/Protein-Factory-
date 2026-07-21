@@ -18,6 +18,13 @@ export interface FunctionSelection {
   traitColor: FunctionReferenceRow['traitColor']
 }
 
+export interface FactoryStageCue {
+  prompt: string
+  focusLabel: string
+  steps: string[]
+  traitColor: FunctionReferenceRow['traitColor'] | null
+}
+
 export interface FactorySceneSnapshot extends FactorySceneState {
   codons: string[]
   currentCodonIndex: number
@@ -30,6 +37,7 @@ export interface FactorySceneSnapshot extends FactorySceneState {
   feedbackMessage: string
   stageComplete: boolean
   wheelObscured: boolean
+  stageCue: FactoryStageCue
 }
 
 export function buildFactorySceneState(state: GameSessionState): FactorySceneSnapshot {
@@ -39,7 +47,7 @@ export function buildFactorySceneState(state: GameSessionState): FactorySceneSna
   const selectedFunction = getSelectedFunction(currentRound, state.roundState.selectedFunctionRowId)
   const stageComplete = state.roundResults.some((result) => result.id === currentRound.id)
 
-  return {
+  const snapshot: Omit<FactorySceneSnapshot, 'stageCue'> = {
     activeStationId: stationIdForRoundType(currentRound.type),
     completedStationIds: completedStations(state),
     inputLocked: stageComplete || state.isCodonWheelOpen || state.screen !== 'playing',
@@ -72,6 +80,7 @@ export function buildFactorySceneState(state: GameSessionState): FactorySceneSna
     stageComplete,
     wheelObscured: state.isCodonWheelOpen,
   }
+  return { ...snapshot, stageCue: buildStageCue(snapshot) }
 }
 
 export function buildSuccessSceneState(round: GameRound): FactorySceneSnapshot {
@@ -83,7 +92,7 @@ export function buildSuccessSceneState(round: GameRound): FactorySceneSnapshot {
     ? [productFromRound(round, selectedFunction)]
     : []
 
-  return {
+  const snapshot: Omit<FactorySceneSnapshot, 'stageCue'> = {
     activeStationId: stationIdForRoundType(round.type),
     completedStationIds: [stationIdForRoundType(round.type)],
     inputLocked: true,
@@ -112,6 +121,7 @@ export function buildSuccessSceneState(round: GameRound): FactorySceneSnapshot {
     stageComplete: true,
     wheelObscured: false,
   }
+  return { ...snapshot, stageCue: buildStageCue(snapshot) }
 }
 
 export function buildFinalSceneState(completedProducts: ProductSnapshot[] = defaultProducts()): FactorySceneSnapshot {
@@ -119,7 +129,7 @@ export function buildFinalSceneState(completedProducts: ProductSnapshot[] = defa
   const snapshot = buildSuccessSceneState(finalRound)
   const lastProduct = completedProducts[completedProducts.length - 1]
 
-  return {
+  const finalState: FactorySceneSnapshot = {
     ...snapshot,
     activeStationId: 'trait-vault',
     completedStationIds: ['transcription-press', 'ribosome-galley', 'trait-vault'],
@@ -131,6 +141,66 @@ export function buildFinalSceneState(completedProducts: ProductSnapshot[] = defa
     feedbackTitle: 'Production run complete',
     feedbackMessage: 'Compare the original protein with both one-base variants.',
     transitionActive: false,
+    stageCue: snapshot.stageCue,
+  }
+  return { ...finalState, stageCue: buildStageCue(finalState) }
+}
+
+function buildStageCue(state: Pick<FactorySceneSnapshot,
+  | 'activeAction'
+  | 'activeCodon'
+  | 'aminoAcidChain'
+  | 'currentCodonIndex'
+  | 'dnaStrand'
+  | 'mrna'
+  | 'pendingAminoAcid'
+  | 'repairTarget'
+  | 'selectedFunction'
+  | 'stageComplete'
+>): FactoryStageCue {
+  if (state.activeAction === 'transcription') {
+    const repairIndex = state.repairTarget?.kind === 'base' ? state.repairTarget.index : null
+    const nextOpenIndex = [...state.dnaStrand].findIndex((_, index) => !state.mrna[index] || state.mrna[index] === ' ')
+    const activeIndex = repairIndex ?? (nextOpenIndex >= 0 ? nextOpenIndex : Math.max(0, state.dnaStrand.length - 1))
+    const mrnaBase = state.mrna[activeIndex]
+    return {
+      prompt: 'Pair DNA bases to build the mRNA message.',
+      focusLabel: `Base ${activeIndex + 1}`,
+      steps: [
+        `DNA ${activeIndex + 1}: ${state.dnaStrand[activeIndex] ?? '—'}`,
+        `mRNA ${activeIndex + 1}: ${mrnaBase && mrnaBase !== ' ' ? mrnaBase : 'choose a base'}`,
+      ],
+      traitColor: null,
+    }
+  }
+
+  if (state.activeAction === 'translation') {
+    const codonNumber = state.currentCodonIndex + 1
+    const activeSignal = state.pendingAminoAcid
+      ?? (state.stageComplete && state.currentCodonIndex === 4 ? 'Stop signal' : 'choose an amino acid')
+    const confirmedChain = state.aminoAcidChain.filter(Boolean)
+    return {
+      prompt: 'Read this codon to add one amino acid.',
+      focusLabel: `Codon ${codonNumber}`,
+      steps: [
+        `Codon ${codonNumber}: ${state.activeCodon ?? '—'}`,
+        `Signal: ${activeSignal}`,
+        `Growing chain: ${confirmedChain.length > 0 ? confirmedChain.join('–') : 'waiting'}`,
+      ],
+      traitColor: null,
+    }
+  }
+
+  const chain = state.aminoAcidChain.filter(Boolean).join('–') || 'waiting'
+  return {
+    prompt: 'Connect the completed chain to its modeled outcome.',
+    focusLabel: 'Modeled outcome',
+    steps: [
+      `Chain: ${chain}`,
+      `Pigment: ${state.selectedFunction?.proteinFunction ?? 'choose an outcome'}`,
+      `Trait: ${state.selectedFunction?.expressedTrait ?? 'waiting'}`,
+    ],
+    traitColor: state.selectedFunction?.traitColor ?? null,
   }
 }
 

@@ -253,16 +253,16 @@ export class FactoryRuntime {
     this.labGroup.add(cargoDeck)
 
     const statusRing = new THREE.Mesh(
-      new THREE.TorusGeometry(4.02, 0.055, 8, 64),
-      new THREE.MeshStandardMaterial({ color: 0x7f979a, emissive: 0x000000, roughness: 0.4 }),
+      new THREE.TorusGeometry(3.68, 0.035, 8, 64),
+      new THREE.MeshStandardMaterial({ color: 0x7f979a, emissive: 0x000000, opacity: 0.68, roughness: 0.4, transparent: true }),
     )
     statusRing.rotation.x = Math.PI / 2
-    statusRing.scale.y = 0.25
+    statusRing.scale.y = 0.22
     statusRing.position.set(0, 0.43, 0.15)
     this.labGroup.add(statusRing)
 
     const tray = mesh(
-      new THREE.BoxGeometry(9.2, 0.2, 1.0),
+      new THREE.BoxGeometry(7.8, 0.16, 0.9),
       new THREE.MeshStandardMaterial({ color: 0xb7c8c6, metalness: 0.12, roughness: 0.55 }),
       [0, 0.34, 1.92],
     )
@@ -272,18 +272,18 @@ export class FactoryRuntime {
     this.createComparisonTray()
 
     const progressTrack = mesh(
-      new THREE.BoxGeometry(8.2, 0.1, 0.1),
-      new THREE.MeshStandardMaterial({ color: 0x819497, roughness: 0.5 }),
+      new THREE.BoxGeometry(5.8, 0.06, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0x819497, opacity: 0.55, roughness: 0.5, transparent: true }),
       [0, -0.33, 2.92],
     )
     this.labGroup.add(progressTrack)
 
     const progressFill = mesh(
-      new THREE.BoxGeometry(8.2, 0.13, 0.14),
+      new THREE.BoxGeometry(5.8, 0.09, 0.11),
       new THREE.MeshStandardMaterial({ color: 0x35a889, emissive: 0x155948, emissiveIntensity: 0.16, roughness: 0.42 }),
-      [-4.1, -0.33, 3.0],
+      [-2.9, -0.33, 3.0],
     )
-    progressFill.geometry.translate(4.1, 0, 0)
+    progressFill.geometry.translate(2.9, 0, 0)
     progressFill.scale.x = 0.001
     this.labGroup.add(progressFill)
 
@@ -318,13 +318,13 @@ export class FactoryRuntime {
       upper.scale.set(2.05, 0.43, 0.68)
       mover.add(lower, upper)
     } else {
-      const chamber = mesh(new THREE.CylinderGeometry(1.05, 1.18, 1.42, 28), mutedMaterial, [0, 0.8, 0])
-      const core = mesh(
-        new THREE.TorusKnotGeometry(0.48, 0.12, 64, 10),
-        new THREE.MeshStandardMaterial({ color: 0xaab8b7, roughness: 0.38 }),
-        [0, 0.82, 0],
+      const outcomePanel = mesh(new THREE.BoxGeometry(3.6, 1.0, 0.42), mutedMaterial, [0, 0.78, 0])
+      const display = mesh(
+        new THREE.BoxGeometry(2.75, 0.52, 0.14),
+        new THREE.MeshStandardMaterial({ color: 0xd7e4e1, emissive: 0x2f8d8a, emissiveIntensity: 0.05, roughness: 0.42 }),
+        [0, 0.78, 0.24],
       )
-      mover.add(chamber, core)
+      mover.add(outcomePanel, display)
     }
 
     const lampMaterial = new THREE.MeshStandardMaterial({ color: 0x718689, emissive: 0x000000, roughness: 0.35 })
@@ -399,7 +399,7 @@ export class FactoryRuntime {
       this.buildStopGate(state)
     } else {
       this.buildAminoChain(state.aminoAcidChain, null, -1, null)
-      this.buildFunctionAssay(state)
+      this.buildFunctionOutcome(state)
     }
   }
 
@@ -539,44 +539,51 @@ export class FactoryRuntime {
     this.cargoGroup.add(gate)
   }
 
-  private buildFunctionAssay(state: FactorySceneSnapshot): void {
+  private buildFunctionOutcome(state: FactorySceneSnapshot): void {
     const selectedColor = state.selectedFunction
       ? traitColors[state.selectedFunction.traitColor]
       : 0x809496
+    const pigmentHeight = state.selectedFunction ? pigmentOutputHeight(state.selectedFunction.proteinFunction) : 0.14
     const preview = new THREE.Group()
     preview.position.set(2.55, 0, 0.1)
     markMotionTarget(preview, 'function-preview')
     const dock = mesh(
-      this.pooledGeometry('assay-dock', () => new THREE.BoxGeometry(2.1, 0.12, 0.94)),
-      this.pooledMaterial('assay-dock', () => new THREE.MeshStandardMaterial({ color: 0x6d8588, metalness: 0.18, roughness: 0.5 })),
+      this.pooledGeometry('outcome-dock', () => new THREE.BoxGeometry(2.2, 0.12, 0.94)),
+      this.pooledMaterial('outcome-dock', () => new THREE.MeshStandardMaterial({ color: 0x6d8588, metalness: 0.18, roughness: 0.5 })),
       [0, 0.48, 0],
     )
-    const vessel = mesh(
-      this.pooledGeometry('assay-vessel', () => new THREE.CylinderGeometry(0.63, 0.72, 0.92, 22)),
+    const pigmentOutput = mesh(
+      this.pooledGeometry('pigment-output', () => new THREE.CylinderGeometry(0.3, 0.34, 1, 22)),
       this.pooledMaterial(
-        'assay-vessel',
-        () => new THREE.MeshStandardMaterial({ color: 0xd8e5e3, metalness: 0.12, roughness: 0.34 }),
-      ),
-      [-0.34, 0.93, 0],
-    )
-    const protein = mesh(
-      this.pooledGeometry('assay-protein', () => new THREE.TorusKnotGeometry(0.29, 0.08, 58, 9)),
-      this.pooledMaterial(
-        `assay-protein:${state.selectedFunction ? 1 : 0}`,
+        `pigment-output:${state.selectedFunction ? 1 : 0}`,
         () => new THREE.MeshStandardMaterial({
-          color: 0x2f8d8a,
-          emissive: 0x2f8d8a,
-          emissiveIntensity: state.selectedFunction ? 0.25 : 0.05,
-          roughness: 0.36,
+          color: state.selectedFunction ? 0xd5a33a : 0x91a3a4,
+          emissive: state.selectedFunction ? 0x8c6718 : 0x000000,
+          emissiveIntensity: state.selectedFunction ? 0.22 : 0,
+          roughness: 0.38,
         }),
       ),
-      [-0.34, 0.96, 0],
+      [-0.5, 0.54 + pigmentHeight / 2, 0],
     )
-    protein.rotation.x = Math.PI / 2
-    const traitSwatch = mesh(
-      this.pooledGeometry('assay-swatch', () => new THREE.CylinderGeometry(0.29, 0.29, 0.14, 22)),
+    pigmentOutput.scale.y = pigmentHeight
+    const outcomeArrow = mesh(
+      this.pooledGeometry('outcome-arrow', () => new THREE.ConeGeometry(0.13, 0.34, 12)),
       this.pooledMaterial(
-        `assay-swatch:${selectedColor}:${state.selectedFunction ? 1 : 0}`,
+        'outcome-arrow',
+        () => new THREE.MeshStandardMaterial({
+          color: 0x2f8d8a,
+          emissive: 0x1c514f,
+          emissiveIntensity: 0.12,
+          roughness: 0.42,
+        }),
+      ),
+      [0.14, 0.75, 0],
+    )
+    outcomeArrow.rotation.z = -Math.PI / 2
+    const traitSwatch = mesh(
+      this.pooledGeometry('outcome-swatch', () => new THREE.CylinderGeometry(0.34, 0.34, 0.16, 22)),
+      this.pooledMaterial(
+        `outcome-swatch:${selectedColor}:${state.selectedFunction ? 1 : 0}`,
         () => new THREE.MeshStandardMaterial({
           color: selectedColor,
           emissive: selectedColor,
@@ -584,21 +591,22 @@ export class FactoryRuntime {
           roughness: 0.4,
         }),
       ),
-      [0.69, 0.72, 0],
+      [0.72, 0.72, 0],
     )
-    preview.add(dock, vessel, protein, traitSwatch)
+    preview.add(dock, pigmentOutput, outcomeArrow, traitSwatch)
     this.cargoGroup.add(preview)
 
     const halo = new THREE.Mesh(
-      this.pooledGeometry('tray-ring', () => new THREE.TorusGeometry(0.58, 0.05, 8, 32)),
+      this.pooledGeometry('outcome-repair-ring', () => new THREE.TorusGeometry(1.05, 0.05, 8, 36)),
       this.pooledMaterial(
-        'assay-repair-halo',
+        'outcome-repair-halo',
         () => new THREE.MeshStandardMaterial({ color: 0xc95656, emissive: 0xc95656, emissiveIntensity: 0.5 }),
       ),
     )
     halo.rotation.x = Math.PI / 2
-    halo.position.set(2.21, 0.49, 0.1)
-    halo.scale.setScalar(state.repairTarget?.kind === 'function-row' ? 1.35 : 0.001)
+    halo.scale.y = 0.42
+    halo.position.set(2.55, 0.49, 0.1)
+    halo.scale.multiplyScalar(state.repairTarget?.kind === 'function-row' ? 1 : 0.001)
     this.cargoGroup.add(halo)
   }
 
@@ -643,7 +651,7 @@ export class FactoryRuntime {
   }
 
   private createComparisonTray(): void {
-    const positions = [-3.0, 0, 3.0]
+    const positions = [-2.45, 0, 2.45]
     const slotGeometry = this.pooledGeometry('tray-slot', () => new THREE.CylinderGeometry(0.72, 0.78, 0.12, 24))
     const slotMaterial = this.pooledMaterial(
       'tray-slot',
@@ -774,7 +782,7 @@ export class FactoryRuntime {
 
     const pulse = Math.sin(progress * Math.PI)
     const quickPulse = Math.sin(progress * Math.PI * 2) * (1 - progress)
-    this.statusRing.scale.set(1 + pulse * 0.018, 0.25 + pulse * 0.01, 1 + pulse * 0.018)
+    this.statusRing.scale.set(1 + pulse * 0.018, 0.22 + pulse * 0.01, 1 + pulse * 0.018)
     if (this.reaction.kind === 'incorrect') this.cargoGroup.position.x = quickPulse * 0.11
     else this.cargoGroup.position.x = 0
 
@@ -1021,6 +1029,14 @@ function aminoColor(aminoAcid: string): number {
   return palette[hash % palette.length]
 }
 
+function pigmentOutputHeight(proteinFunction: string): number {
+  const normalized = proteinFunction.toLowerCase()
+  if (normalized.startsWith('high')) return 0.86
+  if (normalized.startsWith('moderate')) return 0.64
+  if (normalized.startsWith('low')) return 0.42
+  return 0.18
+}
+
 function sceneDescription(state: FactorySceneSnapshot): string {
   const repair = state.repairTarget ? ` Repair needed at ${state.repairTarget.label}.` : ''
   const feedback = state.feedbackTitle ? ` ${state.feedbackTitle}. ${state.feedbackMessage}` : ''
@@ -1031,8 +1047,8 @@ function sceneDescription(state: FactorySceneSnapshot): string {
         ? ` Active codon ${state.activeCodon}.${state.pendingAminoAcid ? ` Pending amino acid ${state.pendingAminoAcid}.` : ''}${state.currentCodonIndex === 4 ? ' Stop is a signal and is not added to the amino acid chain.' : ''}`
         : ''
       : state.selectedFunction
-        ? ` Provisional assay outcome: ${state.selectedFunction.proteinFunction}, ${state.selectedFunction.expressedTrait}.`
-        : ' No assay outcome selected.'
+        ? ` Provisional modeled outcome: ${state.selectedFunction.proteinFunction}, ${state.selectedFunction.expressedTrait}.`
+        : ' No modeled outcome selected.'
   return `${state.cargoLabel}. ${state.activeStationLabel} action.${actionState}${repair}${feedback}`.trim()
 }
 

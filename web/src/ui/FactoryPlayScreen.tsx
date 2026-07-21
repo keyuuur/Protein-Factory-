@@ -1,5 +1,5 @@
 import { CircleDot, Dna, FlaskConical, Volume2, VolumeX } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { GameAction } from '../game/simulation/gameReducer'
 import { buildFactorySceneState } from '../render/adapters/sceneState'
 import type { GameSessionState, MolecularState, ProductSnapshot, ProductionAction } from '../types'
@@ -117,8 +117,27 @@ export function FactoryPlayScreen({ dispatch, state }: FactoryPlayScreenProps) {
       <section className="shared-workbench" aria-label="Protein production workbench">
         <section className="laboratory-viewport" aria-label="Active cell laboratory view">
           <FactoryCanvas onStationSelect={handleStationSelect} sceneState={sceneState} />
-          <div className="lab-viewport-label" aria-hidden="true">
-            <span>Active laboratory</span>
+          <div className="lab-viewport-label" aria-hidden="true" data-testid="lab-stage-caption">
+            <span>{sceneState.stageCue.prompt}</span>
+            <strong>{sceneState.stageCue.focusLabel}</strong>
+          </div>
+          <div
+            aria-hidden="true"
+            className={`lab-relationship ${sceneState.activeAction}`}
+            data-focus={sceneState.stageCue.focusLabel}
+            data-testid="lab-relationship"
+          >
+            {sceneState.stageCue.steps.map((step, index) => (
+              <Fragment key={step}>
+                {index > 0 && <b aria-hidden="true">→</b>}
+                <span className={index === 0 ? 'source' : index === sceneState.stageCue.steps.length - 1 ? 'result' : 'target'}>
+                  {sceneState.stageCue.traitColor && index === sceneState.stageCue.steps.length - 1 && (
+                    <i className={`trait-swatch ${sceneState.stageCue.traitColor}`} />
+                  )}
+                  {step}
+                </span>
+              </Fragment>
+            ))}
           </div>
         </section>
 

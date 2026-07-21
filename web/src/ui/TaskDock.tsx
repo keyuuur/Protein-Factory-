@@ -411,7 +411,7 @@ function FunctionTask({
         feedbackRef={feedbackRef}
         idleMessage={selectedRow
           ? `Selected, not checked: ${selectedRow.proteinFunction}, ${selectedRow.expressedTrait}.`
-          : 'Select one assay row, then check the match.'}
+          : 'Select one modeled outcome, then check the match.'}
       />
       <div className="action-shelf function-action">
         <HintBlock hint={round.hint} isOpen={roundState.showHint} onToggle={onToggleHint} />

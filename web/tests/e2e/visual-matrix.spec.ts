@@ -32,6 +32,9 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
 
   await expect(page.getByRole('heading', { name: 'Build the mRNA' })).toBeVisible()
   await assertCanvasIsRendered(page)
+  await expect(page.getByTestId('lab-stage-caption')).toContainText('Pair DNA bases to build the mRNA message.')
+  await expect(page.getByTestId('lab-relationship')).toContainText('DNA 1:')
+  await assertCompactLaboratory(page)
   const transcription = await currentRound(page)
   expect(transcription.type).toBe('transcription')
   if (transcription.type !== 'transcription') return
@@ -61,6 +64,8 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
 
   const translation = await currentRound(page)
   expect(translation.type).toBe('translation')
+  await expect(page.getByTestId('lab-stage-caption')).toContainText('Read this codon to add one amino acid.')
+  await expect(page.getByTestId('lab-relationship')).toContainText('Growing chain:')
   const viewport = page.viewportSize()
   if (viewport && viewport.width <= 820 && viewport.height > viewport.width) {
     await page.getByRole('button', { name: 'Open Codon Wheel' }).click()
@@ -94,6 +99,8 @@ test('captures the complete pass-1 flow at the project viewport', async ({ page 
   await continueAfterSuccess(page)
 
   await expect(page.getByRole('heading', { name: 'Function Test' })).toBeVisible()
+  await expect(page.getByTestId('lab-stage-caption')).toContainText('Connect the completed chain to its modeled outcome.')
+  await expect(page.getByTestId('lab-relationship')).toContainText('Pigment:')
   await assertMinimumButtonSize(page)
   await assertNoHorizontalOverflow(page)
   await capturePng(page, testInfo, `${visualPass}-function-test-full-page`)
@@ -174,6 +181,21 @@ async function assertMobileWheelIsVisibleAndSeparated(page: Parameters<typeof be
   expect(boxes.viewportTop).toBeGreaterThanOrEqual(boxes.closeBottom - 1)
   expect(boxes.keyTop).toBeGreaterThanOrEqual(boxes.viewportBottom - 1)
   expect(boxes.keyBottom).toBeLessThanOrEqual(boxes.bottom + 1)
+}
+
+async function assertCompactLaboratory(page: Parameters<typeof beginRun>[0]) {
+  const viewport = page.viewportSize()
+  const bounds = await page.locator('.laboratory-viewport').boundingBox()
+  expect(bounds).not.toBeNull()
+  if (!viewport || !bounds) return
+
+  const maximumHeight = viewport.width <= 700
+    ? 156
+    : viewport.width <= 820 && viewport.height > viewport.width
+      ? 207
+      : Math.max(172, viewport.height * 0.23)
+  expect(bounds.height).toBeGreaterThanOrEqual(150)
+  expect(bounds.height).toBeLessThanOrEqual(maximumHeight)
 }
 
 async function armInteractionReactionTimer(page: Parameters<typeof beginRun>[0]) {

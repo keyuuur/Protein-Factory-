@@ -30,6 +30,12 @@ describe('factory scene-state adapter', () => {
       selectedFunction: null,
       stageComplete: false,
     })
+    expect(snapshot.stageCue).toEqual({
+      focusLabel: 'Base 1',
+      prompt: 'Pair DNA bases to build the mRNA message.',
+      steps: [`DNA 1: ${round.context.sequence.dnaStrand[0]}`, 'mRNA 1: choose a base'],
+      traitColor: null,
+    })
 
     const wrongBase = round.options.find((base) => base !== round.answer[0])!
     state = enterTranscription(state, `${wrongBase}${round.answer.slice(1)}`)
@@ -39,6 +45,8 @@ describe('factory scene-state adapter', () => {
     expect(snapshot.mrna).toBe(`${wrongBase}${round.answer.slice(1)}`)
     expect(snapshot.repairTarget).toEqual(state.roundState.repairTarget)
     expect(snapshot.repairTarget).toMatchObject({ kind: 'base', index: 0, expected: round.answer[0] })
+    expect(snapshot.stageCue.focusLabel).toBe('Base 1')
+    expect(snapshot.stageCue.steps[1]).toBe(`mRNA 1: ${wrongBase}`)
     expect(snapshot.feedbackTitle).toBe(state.feedback?.title)
     expect(snapshot.feedbackMessage).toBe(state.feedback?.message)
     expect(snapshot.stageComplete).toBe(false)
@@ -78,12 +86,18 @@ describe('factory scene-state adapter', () => {
     expect(snapshot.activeCodon).toBe(round.codons[0])
     expect(snapshot.pendingAminoAcid).toBeNull()
     expect(snapshot.aminoAcidChain).toEqual(['', '', '', ''])
+    expect(snapshot.stageCue).toMatchObject({
+      focusLabel: 'Codon 1',
+      prompt: 'Read this codon to add one amino acid.',
+      steps: [`Codon 1: ${round.codons[0]}`, 'Signal: choose an amino acid', 'Growing chain: waiting'],
+    })
 
     state = gameReducer(state, { type: 'SELECT_TRANSLATION', index: 0, value: round.answers[0] })
     snapshot = buildFactorySceneState(state)
     expect(snapshot.activeCodon).toBe(round.codons[0])
     expect(snapshot.pendingAminoAcid).toBe(round.answers[0])
     expect(snapshot.aminoAcidChain[0]).toBe('')
+    expect(snapshot.stageCue.steps[1]).toBe(`Signal: ${round.answers[0]}`)
 
     state = gameReducer(state, { type: 'CHECK_TRANSLATION_CODON' })
     snapshot = buildFactorySceneState(state)
@@ -134,6 +148,16 @@ describe('factory scene-state adapter', () => {
       rowId: wrongRow.id,
       proteinFunction: wrongRow.proteinFunction,
       expressedTrait: wrongRow.expressedTrait,
+      traitColor: wrongRow.traitColor,
+    })
+    expect(snapshot.stageCue).toEqual({
+      focusLabel: 'Modeled outcome',
+      prompt: 'Connect the completed chain to its modeled outcome.',
+      steps: [
+        `Chain: ${round.context.sequence.aminoAcidChain.join('–')}`,
+        `Pigment: ${wrongRow.proteinFunction}`,
+        `Trait: ${wrongRow.expressedTrait}`,
+      ],
       traitColor: wrongRow.traitColor,
     })
     expect(snapshot.stageComplete).toBe(false)
